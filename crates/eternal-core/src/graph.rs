@@ -15,7 +15,7 @@ impl Default for BranchConfig {
         Self {
             maximum_branches: 4,
             minimum_separation: 4,
-            target_branch_fraction: 1.0 / 6.0,
+            target_branch_fraction: 1.0 / 10.0,
             threshold: None,
         }
     }
@@ -60,9 +60,10 @@ impl BranchGraph {
                     })
                     .map(|destination| Branch {
                         destination: destination.index,
-                        distance: feature_distance(
-                            &source.features,
-                            &destination.features,
+                        distance: transition_distance(
+                            analysis,
+                            source.index,
+                            destination.index,
                             &normalisation,
                         ),
                     })
@@ -87,7 +88,7 @@ impl BranchGraph {
             })
             .collect();
 
-        ensure_long_backward_branch(&candidates, &mut branches);
+        ensure_long_backward_branch(&candidates, &mut branches, threshold);
         let last_branch_point = best_last_branch(&branches);
         remove_end_traps(&mut branches, last_branch_point);
         Self {
@@ -139,6 +140,37 @@ fn feature_distance(left: &Features, right: &Features, norm: &Normalisation) -> 
     10.0 * chroma + 4.0 * timbre + 2.0 * loudness + onset
 }
 
+fn transition_distance(
+    analysis: &Analysis,
+    source: usize,
+    destination: usize,
+    norm: &Normalisation,
+) -> f32 {
+    let beats = &analysis.beats;
+    let direct =
+        0.55 * feature_distance(
+            &beats[source].start_features,
+            &beats[destination].start_features,
+            norm,
+        ) + 0.25 * feature_distance(&beats[source].features, &beats[destination].features, norm);
+
+    // Matching neighbouring beats avoids locally similar attacks that belong
+    // to incompatible phrases. Missing context at the track edges is neutral.
+    let previous = source
+        .checked_sub(1)
+        .zip(destination.checked_sub(1))
+        .map_or(0.0, |(left, right)| {
+            0.10 * feature_distance(&beats[left].features, &beats[right].features, norm)
+        });
+    let next = beats
+        .get(source + 1)
+        .zip(beats.get(destination + 1))
+        .map_or(0.0, |(left, right)| {
+            0.10 * feature_distance(&left.features, &right.features, norm)
+        });
+    direct + previous + next
+}
+
 fn euclidean<const N: usize>(left: &[f32; N], right: &[f32; N]) -> f32 {
     left.iter()
         .zip(right)
@@ -161,14 +193,30 @@ fn adaptive_threshold(candidates: &[Vec<Branch>], beat_count: usize, target_frac
     best_distances[target - 1]
 }
 
-fn ensure_long_backward_branch(candidates: &[Vec<Branch>], branches: &mut [Vec<Branch>]) {
+fn ensure_long_backward_branch(
+    candidates: &[Vec<Branch>],
+    branches: &mut [Vec<Branch>],
+    threshold: f32,
+) {
+    // A bad emergency edge is worse than looping earlier in the track. Only
+    // synthesize an escape when the accepted graph has no backward edge at all.
+    if branches
+        .iter()
+        .enumerate()
+        .any(|(source, items)| items.iter().any(|branch| branch.destination < source))
+    {
+        return;
+    }
+    let maximum_distance = threshold * 1.25;
     let best = candidates
         .iter()
         .enumerate()
         .flat_map(|(source, items)| {
             items
                 .iter()
-                .filter(move |branch| branch.destination < source)
+                .filter(move |branch| {
+                    branch.destination < source && branch.distance <= maximum_distance
+                })
                 .map(move |branch| (source - branch.destination, source, branch))
         })
         .max_by(|left, right| {
@@ -213,6 +261,10 @@ mod tests {
                 start: index as f64 / 2.0,
                 duration: 0.5,
                 features: Features {
+                    chroma: [index.rem_euclid(4) as f32 / 4.0; 12],
+                    ..Features::default()
+                },
+                start_features: Features {
                     chroma: [index.rem_euclid(4) as f32 / 4.0; 12],
                     ..Features::default()
                 },

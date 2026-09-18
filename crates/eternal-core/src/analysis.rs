@@ -40,6 +40,8 @@ pub struct Beat {
     pub start: f64,
     pub duration: f64,
     pub features: Features,
+    /// Features near the attack, where a transition enters this beat.
+    pub start_features: Features,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -230,6 +232,11 @@ fn describe_beats(
                 start: start_seconds,
                 duration: end_seconds - start_seconds,
                 features: aggregate_features(frame_slice, audio.sample_rate, config.frame_size),
+                start_features: aggregate_features(
+                    &frame_slice[..(frame_slice.len() / 3).max(1)],
+                    audio.sample_rate,
+                    config.frame_size,
+                ),
             }
         })
         .filter(|beat| beat.duration > 0.05)

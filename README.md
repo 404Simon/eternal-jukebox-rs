@@ -53,8 +53,9 @@ analysis, or browser JavaScript:
 - `analysis` uses spectral flux and autocorrelation for the beat grid, then
   extracts chroma, spectral shape, loudness and onset strength for every beat.
 - `graph` ports the original nearest-neighbour idea: only same-position beats
-  are compared, a dynamic threshold targets useful sparsity, and a long backward
-  edge plus a final branch boundary prevent playback from falling off the end.
+  are compared, attacks and neighbouring beats contribute to the transition
+  score, a dynamic threshold targets useful sparsity, and a final branch
+  boundary prevents playback from falling off the end.
 - `planner` performs the infinite probabilistic walk and rotates alternatives so
   repeated visits do not always make the same jump.
 - `eternal-cli` queues short, edge-faded PCM slices through Rodio for gapless
