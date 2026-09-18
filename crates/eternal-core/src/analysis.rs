@@ -6,6 +6,9 @@ use thiserror::Error;
 
 use crate::Audio;
 
+const SILENCE_FLOOR_DB: f32 = -60.0;
+const SILENCE_BELOW_PEAK_DB: f32 = 40.0;
+
 #[derive(Clone, Debug)]
 pub struct AnalysisConfig {
     pub frame_size: usize,
@@ -92,7 +95,7 @@ pub fn analyse(audio: &Audio, config: &AnalysisConfig) -> Result<Analysis, Analy
     let period = estimate_period(&onset, audio.sample_rate, config);
     let first = estimate_phase(&onset, period);
     let beat_frames = track_beat_positions(&onset, first, period);
-    let beats = describe_beats(&frames, &beat_frames, audio, config);
+    let beats = trim_silent_boundaries(describe_beats(&frames, &beat_frames, audio, config));
     let seconds_per_beat = period as f32 * config.hop_size as f32 / audio.sample_rate as f32;
 
     Ok(Analysis {
@@ -278,6 +281,30 @@ fn describe_beats(
         .collect()
 }
 
+fn trim_silent_boundaries(mut beats: Vec<Beat>) -> Vec<Beat> {
+    let peak_loudness = beats
+        .iter()
+        .map(|beat| beat.features.loudness_db)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let audible_threshold = (peak_loudness - SILENCE_BELOW_PEAK_DB).max(SILENCE_FLOOR_DB);
+    let Some(first) = beats
+        .iter()
+        .position(|beat| beat.features.loudness_db > audible_threshold)
+    else {
+        return Vec::new();
+    };
+    let last = beats
+        .iter()
+        .rposition(|beat| beat.features.loudness_db > audible_threshold)
+        .unwrap_or(first);
+
+    let mut audible = beats.drain(first..=last).collect::<Vec<_>>();
+    for (index, beat) in audible.iter_mut().enumerate() {
+        beat.index = index;
+    }
+    audible
+}
+
 fn aggregate_features(frames: &[Frame], sample_rate: u32, fft_size: usize) -> Features {
     let mut chroma = [0.0; 12];
     let mut weighted_frequency = 0.0;
@@ -363,6 +390,36 @@ mod tests {
         assert_eq!(
             track_beat_positions(&onset, 3, 10),
             vec![3, 14, 24, 35, 45, 56, 66]
+        );
+    }
+
+    #[test]
+    fn silent_beats_are_trimmed_only_from_track_boundaries() {
+        let loudness = [-180.0, -70.0, -12.0, -80.0, -18.0, -75.0];
+        let beats = loudness
+            .into_iter()
+            .enumerate()
+            .map(|(index, loudness_db)| Beat {
+                index,
+                start: index as f64,
+                duration: 1.0,
+                features: Features {
+                    loudness_db,
+                    ..Features::default()
+                },
+                start_features: Features::default(),
+            })
+            .collect();
+
+        let trimmed = trim_silent_boundaries(beats);
+
+        assert_eq!(trimmed.len(), 3);
+        assert!((trimmed[0].start - 2.0).abs() < f64::EPSILON);
+        assert!((trimmed[1].features.loudness_db - -80.0).abs() < f32::EPSILON);
+        assert!((trimmed[2].start - 4.0).abs() < f64::EPSILON);
+        assert_eq!(
+            trimmed.iter().map(|beat| beat.index).collect::<Vec<_>>(),
+            vec![0, 1, 2]
         );
     }
 }
