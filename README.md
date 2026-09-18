@@ -16,6 +16,9 @@ The project is split into two crates:
 cargo run --release -p eternal-cli -- play song.mp3
 ```
 
+MP3 and Opus files are supported, including Opus audio in Ogg, WebM, and
+Matroska containers.
+
 Press Ctrl-C to stop. The first start compiles the release binary; to install
 it on your path instead, run:
 
@@ -25,8 +28,8 @@ eternal play song.mp3
 ```
 
 Linux builds need ALSA development headers (`libasound2-dev` on Debian/Ubuntu,
-`alsa-lib-devel` on Fedora). MP3 decoding and analysis are implemented in Rust;
-`ffmpeg` is not needed at runtime.
+`alsa-lib-devel` on Fedora). Opus support bundles libopus and needs CMake and a C
+compiler when building. `ffmpeg` is not needed at runtime.
 
 ## Commands
 
@@ -49,7 +52,8 @@ frontend built on `eternal-core`.
 The implementation has no dependency on the old Kotlin server, Spotify audio
 analysis, or browser JavaScript:
 
-- `audio` decodes interleaved floating-point PCM with Symphonia.
+- `audio` decodes interleaved floating-point PCM with Symphonia, using a
+  libopus-backed Symphonia adapter for Opus.
 - `analysis` uses spectral flux and autocorrelation for the beat grid, then
   extracts chroma, spectral shape, loudness and onset strength for every beat.
 - `graph` ports the original nearest-neighbour idea: only same-position beats

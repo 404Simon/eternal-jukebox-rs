@@ -12,6 +12,7 @@ rand.workspace = true
 realfft.workspace = true
 serde.workspace = true
 symphonia.workspace = true
+symphonia-adapter-libopus.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

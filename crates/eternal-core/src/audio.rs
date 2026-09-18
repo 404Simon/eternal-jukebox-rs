@@ -1,15 +1,26 @@
-use std::{fs::File, path::Path};
+use std::{fs::File, path::Path, sync::OnceLock};
 
 use symphonia::core::{
     audio::SampleBuffer,
-    codecs::DecoderOptions,
+    codecs::{CodecRegistry, DecoderOptions},
     errors::Error as SymphoniaError,
     formats::FormatOptions,
     io::{MediaSourceStream, MediaSourceStreamOptions},
     meta::MetadataOptions,
     probe::Hint,
 };
+use symphonia_adapter_libopus::OpusDecoder;
 use thiserror::Error;
+
+fn codecs() -> &'static CodecRegistry {
+    static CODECS: OnceLock<CodecRegistry> = OnceLock::new();
+    CODECS.get_or_init(|| {
+        let mut codecs = CodecRegistry::new();
+        symphonia::default::register_enabled_codecs(&mut codecs);
+        codecs.register_all::<OpusDecoder>();
+        codecs
+    })
+}
 
 /// Fully decoded, interleaved PCM audio.
 #[derive(Clone, Debug)]
@@ -56,7 +67,7 @@ pub enum AudioError {
     FormatChanged,
 }
 
-/// Decode an MP3 (or another format enabled by Symphonia) into interleaved PCM.
+/// Decode an MP3, Opus, or another enabled audio format into interleaved PCM.
 pub fn decode(path: impl AsRef<Path>) -> Result<Audio, AudioError> {
     let path = path.as_ref();
     let file = File::open(path).map_err(|source| AudioError::Open {
@@ -80,7 +91,7 @@ pub fn decode(path: impl AsRef<Path>) -> Result<Audio, AudioError> {
     let mut format = probed.format;
     let track = format.default_track().ok_or(AudioError::NoTrack)?;
     let track_id = track.id;
-    let mut codec = symphonia::default::get_codecs()
+    let mut codec = codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(AudioError::Decode)?;
 
@@ -111,4 +122,16 @@ pub fn decode(path: impl AsRef<Path>) -> Result<Audio, AudioError> {
         sample_rate: spec.rate,
         channels: spec.channels.count() as u16,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use symphonia::core::codecs::CODEC_TYPE_OPUS;
+
+    use super::codecs;
+
+    #[test]
+    fn opus_decoder_is_registered() {
+        assert!(codecs().get_codec(CODEC_TYPE_OPUS).is_some());
+    }
 }
