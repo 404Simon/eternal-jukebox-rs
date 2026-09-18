@@ -1,0 +1,24 @@
+[package]
+name = "eternal-cli"
+description = "Command-line player for Eternal Jukebox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "eternal"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+eternal-core = { path = "../eternal-core" }
+rand.workspace = true
+rodio.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+

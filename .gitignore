@@ -1,0 +1,8 @@
+/target/
+/.idea/
+/.vscode/
+*.rs.bk
+
+# Upstream implementation kept locally as a porting reference.
+/EternalJukebox/
+
