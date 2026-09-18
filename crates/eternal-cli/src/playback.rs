@@ -5,7 +5,7 @@ use eternal_core::{Analysis, Audio, BranchGraph, PlaybackPlanner};
 use rodio::{DeviceSinkBuilder, Player, buffer::SamplesBuffer};
 
 const QUEUED_BEATS: usize = 8;
-const FADE_MILLISECONDS: u32 = 5;
+const FADE_MILLISECONDS: u32 = 2;
 
 pub fn play(
     audio: &Audio,

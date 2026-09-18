@@ -91,7 +91,7 @@ pub fn analyse(audio: &Audio, config: &AnalysisConfig) -> Result<Analysis, Analy
     let onset = onset_envelope(&frames);
     let period = estimate_period(&onset, audio.sample_rate, config);
     let first = estimate_phase(&onset, period);
-    let beat_frames = beat_positions(first, period, frames.len());
+    let beat_frames = track_beat_positions(&onset, first, period);
     let beats = describe_beats(&frames, &beat_frames, audio, config);
     let seconds_per_beat = period as f32 * config.hop_size as f32 / audio.sample_rate as f32;
 
@@ -200,8 +200,23 @@ fn phase_score(onset: &[f32], phase: usize, period: usize) -> f32 {
         .sum()
 }
 
-fn beat_positions(first: usize, period: usize, frame_count: usize) -> Vec<usize> {
-    let mut positions: Vec<_> = (first..frame_count).step_by(period.max(1)).collect();
+fn track_beat_positions(onset: &[f32], first: usize, period: usize) -> Vec<usize> {
+    let period = period.max(1);
+    let search_radius = (period / 8).max(1);
+    let mut positions = Vec::new();
+    let mut current = strongest_near(onset, first, search_radius);
+
+    while current < onset.len() {
+        positions.push(current);
+        let predicted = current.saturating_add(period);
+        if predicted >= onset.len() {
+            break;
+        }
+        current = strongest_near(onset, predicted, search_radius);
+        if current <= *positions.last().expect("a position was just pushed") {
+            current = predicted;
+        }
+    }
     if positions
         .first()
         .is_some_and(|position| *position > period / 2)
@@ -209,6 +224,26 @@ fn beat_positions(first: usize, period: usize, frame_count: usize) -> Vec<usize>
         positions.insert(0, 0);
     }
     positions
+}
+
+fn strongest_near(onset: &[f32], predicted: usize, radius: usize) -> usize {
+    let start = predicted.saturating_sub(radius);
+    let end = predicted.saturating_add(radius).min(onset.len() - 1);
+    (start..=end)
+        .max_by(|&left, &right| {
+            onset_score(onset[left], left, predicted, radius).total_cmp(&onset_score(
+                onset[right],
+                right,
+                predicted,
+                radius,
+            ))
+        })
+        .unwrap_or(predicted)
+}
+
+fn onset_score(strength: f32, position: usize, predicted: usize, radius: usize) -> f32 {
+    let displacement = position.abs_diff(predicted) as f32 / radius as f32;
+    strength - 0.35 * displacement.powi(2)
 }
 
 fn describe_beats(
@@ -317,5 +352,17 @@ mod tests {
         }
         assert!(autocorrelation(&values, 10) > autocorrelation(&values, 9));
         assert_eq!(estimate_phase(&values, 10), 3);
+    }
+
+    #[test]
+    fn beat_tracker_follows_local_timing_changes() {
+        let mut onset = vec![0.0; 70];
+        for position in [3, 14, 24, 35, 45, 56, 66] {
+            onset[position] = 1.0;
+        }
+        assert_eq!(
+            track_beat_positions(&onset, 3, 10),
+            vec![3, 14, 24, 35, 45, 56, 66]
+        );
     }
 }
