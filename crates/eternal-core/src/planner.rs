@@ -12,6 +12,16 @@ pub struct Step {
     pub jumped_from: Option<usize>,
 }
 
+/// A possible choice for the next beat, using the planner's live novelty state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransitionProbability {
+    pub source: usize,
+    pub destination: usize,
+    pub probability: f32,
+    pub distance: Option<f32>,
+    pub is_sequential: bool,
+}
+
 /// Stateful infinite walk over a beat graph.
 pub struct PlaybackPlanner {
     graph: BranchGraph,
@@ -58,6 +68,74 @@ impl PlaybackPlanner {
     #[must_use]
     pub fn graph(&self) -> &BranchGraph {
         &self.graph
+    }
+
+    /// Return the choices that the next call to [`Self::next_step`] will make.
+    #[must_use]
+    pub fn next_probabilities(&self) -> Vec<TransitionProbability> {
+        if self.graph.branches.is_empty() {
+            return Vec::new();
+        }
+        let sequential = self.current.map_or(0, |current| current + 1);
+        if sequential >= self.graph.branches.len() {
+            return vec![TransitionProbability {
+                source: self.current.unwrap_or(0),
+                destination: 0,
+                probability: 1.0,
+                distance: None,
+                is_sequential: false,
+            }];
+        }
+
+        let source = sequential;
+        let branches = &self.graph.branches[source];
+        if branches.is_empty() {
+            return vec![TransitionProbability {
+                source,
+                destination: source,
+                probability: 1.0,
+                distance: None,
+                is_sequential: true,
+            }];
+        }
+        let force_branch = source == self.graph.last_branch_point;
+        let next_branch_chance =
+            (self.branch_chance + self.branch_chance_delta).min(self.maximum_branch_chance);
+        let branch_probability = if force_branch {
+            FINAL_BRANCH_PROBABILITY
+        } else {
+            next_branch_chance
+        };
+        let mut choices = Vec::with_capacity(branches.len() + 1);
+        choices.push(TransitionProbability {
+            source,
+            destination: source,
+            probability: (1.0 - branch_probability)
+                * novelty(self.sequential_uses[source])
+                * destination_novelty(self.beat_visits[source]),
+            distance: None,
+            is_sequential: true,
+        });
+        let branch_base = branch_probability / branches.len() as f32;
+        choices.extend(
+            branches
+                .iter()
+                .enumerate()
+                .map(|(index, branch)| TransitionProbability {
+                    source,
+                    destination: branch.destination,
+                    probability: branch_base
+                        * novelty(self.branch_uses[source][index])
+                        * destination_novelty(self.beat_visits[branch.destination]),
+                    distance: Some(branch.distance),
+                    is_sequential: false,
+                }),
+        );
+        let total = choices.iter().map(|choice| choice.probability).sum::<f32>();
+        for choice in &mut choices {
+            choice.probability /= total;
+        }
+        choices
     }
 
     pub fn next_step(&mut self) -> Option<Step> {
@@ -208,6 +286,36 @@ mod tests {
         let used = novelty(planner.branch_uses[0][0]);
         let unused = novelty(planner.branch_uses[0][1]);
         assert!(unused > used);
+    }
+
+    #[test]
+    fn reported_probabilities_are_normalised() {
+        let graph = BranchGraph {
+            branches: vec![
+                vec![
+                    Branch {
+                        destination: 1,
+                        distance: 0.25,
+                    },
+                    Branch {
+                        destination: 2,
+                        distance: 0.5,
+                    },
+                ],
+                vec![],
+                vec![],
+            ],
+            threshold: 1.0,
+            last_branch_point: 2,
+        };
+        let planner = PlaybackPlanner::with_seed(graph, 42);
+        let choices = planner.next_probabilities();
+        assert_eq!(choices.len(), 3);
+        assert!(
+            (choices.iter().map(|choice| choice.probability).sum::<f32>() - 1.0).abs()
+                < f32::EPSILON
+        );
+        assert!(choices.iter().all(|choice| choice.probability > 0.0));
     }
 
     #[test]

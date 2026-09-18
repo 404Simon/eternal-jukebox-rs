@@ -1,4 +1,5 @@
 mod playback;
+mod tui;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -38,6 +39,9 @@ enum Command {
         /// Make the sequence reproducible.
         #[arg(long)]
         seed: Option<u64>,
+        /// Show an interactive live playback dashboard.
+        #[arg(long)]
+        tui: bool,
     },
 }
 
@@ -65,6 +69,7 @@ fn main() -> Result<()> {
             input,
             threshold,
             seed,
+            tui,
         } => {
             let (analysis, graph, audio) = prepare(&input, threshold)?;
             if graph.branch_count() == 0 {
@@ -77,8 +82,12 @@ fn main() -> Result<()> {
                 graph.branch_count(),
                 graph.threshold
             );
-            eprintln!("Playing forever; press Ctrl-C to stop.");
-            playback::play(&audio, &analysis, graph, seed)?;
+            if tui {
+                tui::play(&audio, &analysis, &graph, seed, &input)?;
+            } else {
+                eprintln!("Playing forever; press Ctrl-C to stop.");
+                playback::play(&audio, &analysis, graph, seed)?;
+            }
         }
     }
     Ok(())

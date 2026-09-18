@@ -50,7 +50,7 @@ pub fn play(
     }
 }
 
-fn beat_samples(
+pub(crate) fn beat_samples(
     audio: &Audio,
     start: f64,
     duration: f64,

@@ -8,4 +8,4 @@ pub mod planner;
 pub use analysis::{Analysis, AnalysisConfig, Beat, Features, analyse};
 pub use audio::{Audio, AudioError, decode};
 pub use graph::{Branch, BranchConfig, BranchGraph};
-pub use planner::{PlaybackPlanner, Step};
+pub use planner::{PlaybackPlanner, Step, TransitionProbability};

@@ -27,6 +27,13 @@ cargo install --path crates/eternal-cli
 eternal play song.mp3
 ```
 
+Add `--tui` for an interactive Ratatui dashboard showing the audible and queued
+beats, live stitching, recent jumps, and the planner's adaptive transition odds:
+
+```sh
+eternal play song.mp3 --tui
+```
+
 Linux builds need ALSA development headers (`libasound2-dev` on Debian/Ubuntu,
 `alsa-lib-devel` on Fedora). Opus support bundles libopus and needs CMake and a C
 compiler when building. `ffmpeg` is not needed at runtime.
@@ -34,7 +41,7 @@ compiler when building. `ffmpeg` is not needed at runtime.
 ## Commands
 
 ```text
-eternal play <FILE> [--threshold <DISTANCE>] [--seed <NUMBER>]
+eternal play <FILE> [--threshold <DISTANCE>] [--seed <NUMBER>] [--tui]
 eternal analyse <FILE> [--threshold <DISTANCE>] [-o analysis.json]
 ```
 
