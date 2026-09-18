@@ -56,8 +56,9 @@ analysis, or browser JavaScript:
   are compared, attacks and neighbouring beats contribute to the transition
   score, a dynamic threshold targets useful sparsity, and a final branch
   boundary prevents playback from falling off the end.
-- `planner` performs the infinite probabilistic walk and rotates alternatives so
-  repeated visits do not always make the same jump.
+- `planner` performs a weighted infinite random walk. Used transitions and
+  frequently visited destinations gradually lose weight, so repeated loops
+  make unexplored branches and the sequential path more likely.
 - `eternal-cli` queues short, edge-faded PCM slices through Rodio for gapless
   live playback.
 
