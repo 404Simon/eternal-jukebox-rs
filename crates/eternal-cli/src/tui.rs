@@ -19,14 +19,22 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Row, Table},
+    widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Row, Table},
 };
 use rodio::{DeviceSinkBuilder, Player, buffer::SamplesBuffer};
 
 use crate::playback::beat_samples;
 
 const QUEUED_BEATS: usize = 8;
-const HISTORY_LENGTH: usize = 18;
+const HISTORY_LENGTH: usize = 256;
+
+const INK: Color = Color::Rgb(205, 214, 244);
+const MUTED: Color = Color::Rgb(108, 112, 134);
+const SURFACE: Color = Color::Rgb(49, 50, 68);
+const CYAN: Color = Color::Rgb(137, 220, 235);
+const GREEN: Color = Color::Rgb(166, 227, 161);
+const MAGENTA: Color = Color::Rgb(203, 166, 247);
+const YELLOW: Color = Color::Rgb(249, 226, 175);
 
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -66,6 +74,7 @@ struct Dashboard<'a> {
     history: VecDeque<QueuedBeat>,
     choices: Vec<TransitionProbability>,
     jump_count: u64,
+    paused: bool,
 }
 
 pub fn play(
@@ -108,6 +117,7 @@ pub fn play(
         history: VecDeque::new(),
         choices: Vec::new(),
         jump_count: 0,
+        paused: false,
     };
     let mut terminal = TerminalGuard::new()?;
 
@@ -153,11 +163,20 @@ pub fn play(
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
-            && (matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-                || (key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL)))
         {
-            return Ok(());
+            if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+                || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+            {
+                return Ok(());
+            }
+            if matches!(key.code, KeyCode::Char('p' | ' ')) {
+                dashboard.paused = !dashboard.paused;
+                if dashboard.paused {
+                    player.pause();
+                } else {
+                    player.play();
+                }
+            }
         }
     }
 }
@@ -175,7 +194,7 @@ fn draw(frame: &mut Frame, dashboard: &Dashboard<'_>) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Length(3),
             Constraint::Min(10),
             Constraint::Length(3),
@@ -184,50 +203,70 @@ fn draw(frame: &mut Frame, dashboard: &Dashboard<'_>) {
     draw_header(frame, outer[0], dashboard);
     draw_position(frame, outer[1], dashboard);
     let middle = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(7), Constraint::Min(8)])
+        .split(outer[2]);
+    draw_stitch(frame, middle[0], dashboard);
+    let details = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(outer[2]);
-    let left = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
-        .split(middle[0]);
-    draw_stitch(frame, left[0], dashboard);
-    draw_history(frame, left[1], dashboard);
-    draw_choices(frame, middle[1], dashboard);
+        .split(middle[1]);
+    draw_history(frame, details[0], dashboard);
+    draw_choices(frame, details[1], dashboard);
     draw_footer(frame, outer[3], dashboard);
 }
 
 fn panel(title: &str) -> Block<'_> {
     Block::default()
-        .title(format!(" {title} "))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(SURFACE))
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
     let live = dashboard.live.as_ref().map_or(0, |beat| beat.step.beat);
-    let text = Line::from(vec![
+    let title = Line::from(vec![
         Span::styled(
-            " ◉ ETERNAL JUKEBOX ",
+            " ♫  ETERNAL JUKEBOX ",
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Cyan)
+                .bg(CYAN)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(
             &dashboard.title,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  •  "),
-        Span::styled(
-            format!("LIVE BEAT {live}"),
-            Style::default().fg(Color::LightGreen),
+            Style::default().fg(INK).add_modifier(Modifier::BOLD),
         ),
     ]);
-    frame.render_widget(Paragraph::new(text).block(panel("NOW PLAYING")), area);
+    let (state, state_color) = if dashboard.paused {
+        ("  PAUSED  ", YELLOW)
+    } else {
+        ("  PLAYING  ", GREEN)
+    };
+    let status = Line::from(vec![
+        Span::styled(
+            state,
+            Style::default()
+                .fg(Color::Black)
+                .bg(state_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("BEAT {live:03}"),
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ·  infinite mix", Style::default().fg(MUTED)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(vec![title, status]).block(panel("NOW PLAYING")),
+        area,
+    );
 }
 
 fn draw_position(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
@@ -240,7 +279,7 @@ fn draw_position(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
         .get(beat)
         .map_or(0.0, |item| item.start);
     let label = format!(
-        "{:02}:{:02}  beat {}/{}  •  {:.1} BPM",
+        " {:02}:{:02}  ·  beat {}/{}  ·  {:.1} BPM ",
         time as u64 / 60,
         time as u64 % 60,
         beat,
@@ -250,7 +289,12 @@ fn draw_position(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
     frame.render_widget(
         Gauge::default()
             .block(panel("TRACK POSITION"))
-            .gauge_style(Style::default().fg(Color::Cyan).bg(Color::Black))
+            .gauge_style(
+                Style::default()
+                    .fg(CYAN)
+                    .bg(SURFACE)
+                    .add_modifier(Modifier::BOLD),
+            )
             .ratio(ratio.clamp(0.0, 1.0))
             .label(label),
         area,
@@ -261,26 +305,24 @@ fn draw_stitch(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
     let mut spans = Vec::new();
     for (index, item) in dashboard.history.iter().rev().take(7).enumerate() {
         if index > 0 {
-            spans.push(Span::styled(" ─ ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(" ─ ", Style::default().fg(SURFACE)));
         }
         spans.push(Span::styled(
             item.step.beat.to_string(),
             Style::default().fg(if item.step.jumped_from.is_some() {
-                Color::Magenta
+                MAGENTA
             } else {
-                Color::Gray
+                MUTED
             }),
         ));
     }
     if !spans.is_empty() {
-        spans.push(Span::styled(" ═▶ ", Style::default().fg(Color::Cyan)));
+        spans.push(Span::styled(" ━▶ ", Style::default().fg(CYAN)));
     }
     if let Some(live) = &dashboard.live {
         spans.push(Span::styled(
             format!("[{}]", live.step.beat),
-            Style::default()
-                .fg(Color::LightGreen)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
         ));
     }
     for item in dashboard.queue.iter().skip(1).take(5) {
@@ -292,14 +334,14 @@ fn draw_stitch(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
         spans.push(Span::styled(
             arrow,
             Style::default().fg(if item.step.jumped_from.is_some() {
-                Color::Magenta
+                MAGENTA
             } else {
-                Color::DarkGray
+                SURFACE
             }),
         ));
         spans.push(Span::styled(
             item.step.beat.to_string(),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(MUTED),
         ));
     }
     frame.render_widget(
@@ -307,8 +349,8 @@ fn draw_stitch(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
             Line::from(spans),
             Line::raw(""),
             Line::styled(
-                "magenta = jump   green = audible   gray = queued",
-                Style::default().fg(Color::DarkGray),
+                "JUMP  magenta     NOW  green     QUEUED  gray",
+                Style::default().fg(MUTED),
             ),
         ])
         .alignment(Alignment::Center)
@@ -325,7 +367,7 @@ fn draw_history(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
                 format!("{:.1}%", item.probability * 100.0),
                 jump_direction(source, item.step.beat).to_owned(),
             ])
-            .style(Style::default().fg(Color::Magenta))
+            .style(Style::default().fg(MAGENTA))
         })
     });
     let table = Table::new(
@@ -337,11 +379,8 @@ fn draw_history(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
         ],
     )
     .header(
-        Row::new(["transition", "chosen odds", "direction"]).style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Row::new(["transition", "chosen odds", "direction"])
+            .style(Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
     )
     .block(panel("RECENT JUMPS"));
     frame.render_widget(table, area);
@@ -372,23 +411,15 @@ fn draw_choices(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{label:<15}"),
-                    Style::default().fg(if choice.is_sequential {
-                        Color::Gray
-                    } else {
-                        Color::LightMagenta
-                    }),
+                    Style::default().fg(if choice.is_sequential { MUTED } else { MAGENTA }),
                 ),
                 Span::styled(
                     bar,
-                    Style::default().fg(if choice.is_sequential {
-                        Color::Cyan
-                    } else {
-                        Color::Magenta
-                    }),
+                    Style::default().fg(if choice.is_sequential { CYAN } else { MAGENTA }),
                 ),
                 Span::styled(
                     format!(" {:>5.1}%{distance}", choice.probability * 100.0),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(INK),
                 ),
             ]))
         });
@@ -400,20 +431,30 @@ fn draw_choices(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
 
 fn draw_footer(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
     let elapsed = dashboard.started.elapsed().as_secs();
-    let text = format!(
-        "  stitched {:02}:{:02}:{:02}   •   {} jumps   •   {} transitions   •   q / Esc / Ctrl-C to quit",
-        elapsed / 3600,
-        elapsed / 60 % 60,
-        elapsed % 60,
-        dashboard.jump_count,
-        dashboard.graph.branch_count(),
-    );
-    frame.render_widget(
-        Paragraph::new(text)
-            .style(Style::default().fg(Color::DarkGray))
-            .block(panel("SESSION")),
-        area,
-    );
+    let text = Line::from(vec![
+        Span::styled(
+            format!(
+                "  ◉  {:02}:{:02}:{:02}",
+                elapsed / 3600,
+                elapsed / 60 % 60,
+                elapsed % 60
+            ),
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("    {} jumps", dashboard.jump_count),
+            Style::default().fg(MAGENTA),
+        ),
+        Span::styled(
+            format!("    {} transitions", dashboard.graph.branch_count()),
+            Style::default().fg(CYAN),
+        ),
+        Span::styled(
+            "                         p / space  pause     q / esc  quit  ",
+            Style::default().fg(YELLOW),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(text).block(panel("SESSION")), area);
 }
 
 fn jump_direction(source: usize, destination: usize) -> &'static str {
