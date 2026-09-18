@@ -149,10 +149,11 @@ fn spectral_frames(
 
 fn onset_envelope(frames: &[Frame]) -> Vec<f32> {
     let mut values: Vec<f32> = frames.iter().map(|frame| frame.flux).collect();
+    let raw = values.clone();
     for index in 0..values.len() {
         let start = index.saturating_sub(8);
-        let mean = values[start..=index].iter().sum::<f32>() / (index - start + 1) as f32;
-        values[index] = (values[index] - mean).max(0.0);
+        let mean = raw[start..=index].iter().sum::<f32>() / (index - start + 1) as f32;
+        values[index] = (raw[index] - mean).max(0.0);
     }
     let peak = values.iter().copied().fold(0.0_f32, f32::max);
     if peak > 0.0 {
@@ -241,10 +242,14 @@ fn aggregate_features(frames: &[Frame], sample_rate: u32, fft_size: usize) -> Fe
     let mut spectral_energy = 0.0;
     let mut squared_deviation = 0.0;
     let mut geometric_log_sum = 0.0;
+    let mut rolloff_sum = 0.0;
     let mut bins = 0;
     let nyquist = sample_rate as f32 / 2.0;
 
     for frame in frames {
+        let frame_energy = frame.spectrum.iter().skip(1).sum::<f32>();
+        let mut cumulative_energy = 0.0;
+        let mut rolloff = 0.0;
         for (bin, &magnitude) in frame.spectrum.iter().enumerate().skip(1) {
             let frequency = bin as f32 * sample_rate as f32 / fft_size as f32;
             if frequency >= 27.5 {
@@ -256,7 +261,12 @@ fn aggregate_features(frames: &[Frame], sample_rate: u32, fft_size: usize) -> Fe
             spectral_energy += magnitude;
             geometric_log_sum += (magnitude + 1.0e-12).ln();
             bins += 1;
+            cumulative_energy += magnitude;
+            if rolloff == 0.0 && cumulative_energy >= frame_energy * 0.85 {
+                rolloff = frequency;
+            }
         }
+        rolloff_sum += rolloff;
     }
     let centroid = weighted_frequency / spectral_energy.max(1.0e-12);
     for frame in frames {
@@ -277,7 +287,12 @@ fn aggregate_features(frames: &[Frame], sample_rate: u32, fft_size: usize) -> Fe
     let onset_strength = frames.iter().map(|frame| frame.flux).sum::<f32>() / frames.len() as f32;
     Features {
         chroma,
-        timbre: [centroid / nyquist, bandwidth / nyquist, 0.0, flatness],
+        timbre: [
+            centroid / nyquist,
+            bandwidth / nyquist,
+            rolloff_sum / frames.len() as f32 / nyquist,
+            flatness,
+        ],
         loudness_db: 20.0 * average_rms.max(1.0e-9).log10(),
         onset_strength,
     }
