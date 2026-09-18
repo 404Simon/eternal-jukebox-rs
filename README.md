@@ -37,8 +37,8 @@ eternal analyse <FILE> [--threshold <DISTANCE>] [-o analysis.json]
 
 `play` decodes and analyses the entire file, then continuously queues individual
 beats. It usually plays the next beat, occasionally selects a similar beat, and
-forces a backward transition before reaching the end. `--seed` makes those
-choices reproducible. A lower `--threshold` permits fewer, closer matches.
+strongly prefers a backward transition before reaching the end. `--seed` makes
+those choices reproducible. A lower `--threshold` permits fewer, closer matches.
 
 `analyse` writes the detected tempo, beat boundaries and features together with
 the complete branch graph as JSON. This is useful for debugging or for another
@@ -66,6 +66,9 @@ The local analyser is intentionally deterministic and self-contained. Its beat
 tracking is best on music with a steady pulse; unusual metres, strong tempo
 changes, or ambient material may benefit from an explicit `--threshold`, but a
 threshold cannot repair an incorrectly detected beat grid.
+
+See [Playback planning](docs/playback-planning.md) for a complete, approachable
+description of the random walker and its weighting rules.
 
 ## Development
 
