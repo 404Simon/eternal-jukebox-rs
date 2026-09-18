@@ -2,7 +2,9 @@ use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 use crate::BranchGraph;
 
-const FORCED_BRANCH_PROBABILITY: f32 = 0.90;
+// Reaching the final safe branch should strongly favour another musical loop.
+// The novelty weights below still let the outro win eventually.
+const FINAL_BRANCH_PROBABILITY: f32 = 0.98;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Step {
@@ -101,7 +103,7 @@ impl PlaybackPlanner {
             return None;
         }
         let branch_probability = if force_branch {
-            FORCED_BRANCH_PROBABILITY
+            FINAL_BRANCH_PROBABILITY
         } else {
             self.branch_chance
         };
@@ -139,7 +141,7 @@ impl PlaybackPlanner {
 }
 
 fn novelty(uses: u32) -> f32 {
-    1.0 / (uses + 1) as f32
+    1.0 / ((uses + 1) as f32).sqrt()
 }
 
 fn destination_novelty(visits: u32) -> f32 {
@@ -206,6 +208,14 @@ mod tests {
         let used = novelty(planner.branch_uses[0][0]);
         let unused = novelty(planner.branch_uses[0][1]);
         assert!(unused > used);
+    }
+
+    #[test]
+    fn final_branch_remains_likely_after_repetition() {
+        let repeated_branch = FINAL_BRANCH_PROBABILITY * novelty(10) * destination_novelty(10);
+        let fresh_outro = (1.0 - FINAL_BRANCH_PROBABILITY) * novelty(0) * destination_novelty(0);
+        let branch_probability = repeated_branch / (repeated_branch + fresh_outro);
+        assert!(branch_probability > 0.75);
     }
 
     #[test]
