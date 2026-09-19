@@ -148,7 +148,7 @@ The choices are random by default. Passing a seed creates the same walk for the
 same audio analysis and program version:
 
 ```sh
-eternal play song.mp3 --seed 42
+eternal song.mp3 --seed 42
 ```
 
 This is useful when investigating a particular transition sequence. Without a

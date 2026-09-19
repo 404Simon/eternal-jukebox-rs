@@ -1,54 +1,9 @@
-use std::{num::NonZero, sync::Arc, thread, time::Duration};
+use std::{num::NonZero, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
-use eternal_core::{Analysis, Audio, BranchGraph, PlaybackPlanner};
-use rodio::{ChannelCount, DeviceSinkBuilder, Player, SampleRate, Source};
+use eternal_core::Audio;
+use rodio::{ChannelCount, SampleRate, Source};
 
-const QUEUED_BEATS: usize = 8;
 const FADE_MILLISECONDS: u32 = 2;
-
-pub fn play(
-    audio: &Audio,
-    analysis: &Analysis,
-    graph: BranchGraph,
-    seed: Option<u64>,
-) -> Result<()> {
-    let mut output = DeviceSinkBuilder::open_default_sink()
-        .context("could not open the default audio output device")?;
-    output.log_on_drop(false);
-    let player = Player::connect_new(output.mixer());
-    NonZero::new(audio.channels).context("audio has no channels")?;
-    NonZero::new(audio.sample_rate).context("audio has no sample rate")?;
-    let mut planner = match seed {
-        Some(seed) => PlaybackPlanner::with_seed(graph, seed),
-        None => PlaybackPlanner::new(graph),
-    };
-    let mut current = planner
-        .next_step()
-        .context("the playback graph contains no beats")?;
-
-    loop {
-        while player.len() < QUEUED_BEATS {
-            let next = planner
-                .next_step()
-                .context("the playback graph contains no beats")?;
-            let beat = &analysis.beats[current.beat];
-            let source = BeatSource::new(
-                audio,
-                beat.start,
-                beat.duration,
-                current.jumped_from.is_some(),
-                next.jumped_from.is_some(),
-            );
-            player.append(source);
-            if let Some(source) = current.jumped_from {
-                eprintln!("jump {source} → {}", current.beat);
-            }
-            current = next;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-}
 
 pub(crate) struct BeatSource {
     samples: Arc<[f32]>,

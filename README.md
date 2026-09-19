@@ -8,12 +8,12 @@ The project is split into two crates:
 
 - `eternal-core`: decoding, local beat/feature analysis, graph construction,
   and the infinite playback planner.
-- `eternal-cli`: the `eternal` command-line application and audio output.
+- `eternal-tui`: the interactive `eternal` terminal application and audio output.
 
 ## Quick start
 
 ```sh
-cargo run --release -p eternal-cli -- play song.mp3
+cargo run --release -p eternal-tui -- song.mp3
 ```
 
 MP3 and Opus files are supported, including Opus audio in Ogg, WebM, and
@@ -23,16 +23,12 @@ Press Ctrl-C to stop. The first start compiles the release binary; to install
 it on your path instead, run:
 
 ```sh
-cargo install --path crates/eternal-cli
-eternal play song.mp3
+cargo install --path crates/eternal-tui
+eternal song.mp3
 ```
 
-Add `--tui` for an interactive Ratatui dashboard showing the audible and queued
-beats, live stitching, recent jumps, and the planner's adaptive transition odds:
-
-```sh
-eternal play song.mp3 --tui
-```
+The interactive Ratatui dashboard shows the audible and queued beats, live
+stitching, recent jumps, and the planner's adaptive transition odds.
 
 Linux builds need ALSA development headers (`libasound2-dev` on Debian/Ubuntu,
 `alsa-lib-devel` on Fedora). Opus support bundles libopus and needs CMake and a C
@@ -41,18 +37,13 @@ compiler when building. `ffmpeg` is not needed at runtime.
 ## Commands
 
 ```text
-eternal play <FILE> [--threshold <DISTANCE>] [--seed <NUMBER>] [--tui]
-eternal analyse <FILE> [--threshold <DISTANCE>] [-o analysis.json]
+eternal <FILE> [--threshold <DISTANCE>] [--seed <NUMBER>]
 ```
 
-`play` decodes and analyses the entire file, then continuously queues individual
+`eternal` decodes and analyses the entire file, then continuously queues individual
 beats. It usually plays the next beat, occasionally selects a similar beat, and
 strongly prefers a backward transition before reaching the end. `--seed` makes
 those choices reproducible. A lower `--threshold` permits fewer, closer matches.
-
-`analyse` writes the detected tempo, beat boundaries and features together with
-the complete branch graph as JSON. This is useful for debugging or for another
-frontend built on `eternal-core`.
 
 ## Architecture
 
@@ -70,7 +61,7 @@ analysis, or browser JavaScript:
 - `planner` performs a weighted infinite random walk. Used transitions and
   frequently visited destinations gradually lose weight, so repeated loops
   make unexplored branches and the sequential path more likely.
-- `eternal-cli` queues short, edge-faded PCM slices through Rodio for gapless
+- `eternal-tui` queues short, edge-faded PCM slices through Rodio for gapless
   live playback.
 
 The local analyser is intentionally deterministic and self-contained. Its beat

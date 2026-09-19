@@ -23,7 +23,7 @@ use ratatui::{
 };
 use rodio::{DeviceSinkBuilder, Player};
 
-use crate::playback::BeatSource;
+use crate::audio_source::BeatSource;
 
 const QUEUED_BEATS: usize = 8;
 const HISTORY_LENGTH: usize = 256;

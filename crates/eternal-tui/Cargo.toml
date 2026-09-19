@@ -1,6 +1,6 @@
 [package]
-name = "eternal-cli"
-description = "Command-line player for Eternal Jukebox"
+name = "eternal-tui"
+description = "Terminal player for Eternal Jukebox"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -19,7 +19,6 @@ eternal-core = { path = "../eternal-core" }
 rand.workspace = true
 ratatui.workspace = true
 rodio.workspace = true
-serde_json.workspace = true
 
 [lints]
 workspace = true

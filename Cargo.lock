@@ -416,20 +416,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eternal-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossterm",
- "eternal-core",
- "rand",
- "ratatui",
- "rodio",
- "serde_json",
-]
-
-[[package]]
 name = "eternal-core"
 version = "0.1.0"
 dependencies = [
@@ -440,6 +426,19 @@ dependencies = [
  "symphonia",
  "symphonia-adapter-libopus",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "eternal-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm",
+ "eternal-core",
+ "rand",
+ "ratatui",
+ "rodio",
 ]
 
 [[package]]
