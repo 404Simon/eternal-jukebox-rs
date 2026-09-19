@@ -70,7 +70,9 @@ changes, or ambient material may benefit from an explicit `--threshold`, but a
 threshold cannot repair an incorrectly detected beat grid.
 
 See [Playback planning](docs/playback-planning.md) for a complete, approachable
-description of the random walker and its weighting rules.
+description of the random walker and its weighting rules. Maintainers can use
+the deterministic [playback simulator](docs/debug-simulator.md) to measure
+coverage and loop behaviour without playing audio.
 
 ## Development
 

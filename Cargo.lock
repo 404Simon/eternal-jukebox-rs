@@ -429,6 +429,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "eternal-debug"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "eternal-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "eternal-tui"
 version = "0.1.0"
 dependencies = [
