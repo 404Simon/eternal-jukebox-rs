@@ -47,7 +47,7 @@ During one playback session the planner records:
 
 - how often the sequential path was selected at each source beat;
 - how often every explicit branch edge was selected;
-- how often every destination beat was played;
+- the recent playback "heat" of every beat and its surrounding section;
 - the current general probability of making a branch.
 
 The state is kept in memory and starts at zero for every new invocation of the
@@ -62,11 +62,10 @@ Every sequential beat raises it by 1.8 percentage points, up to a maximum of
 This produces stretches of ordinary playback while making a jump progressively
 more likely when no jump has happened recently.
 
-At the graph's final safe branch point, the base branch probability is 98%.
-This strongly favours continuing through a musical loop. The remaining 2%
-belongs to the sequential path into the outro. Novelty weights modify both
-values, so the outro becomes more competitive after a loop has been repeated
-many times.
+At the graph's final safe branch point, the base branch probability is 70%.
+This favours continuing through a musical loop while leaving 30% for the
+sequential path into the outro. Novelty and recent-coverage weights modify both
+values, so the outro becomes more competitive after a loop has been repeated.
 
 ## Novelty weights
 
@@ -77,10 +76,16 @@ this novelty factor:
 transition novelty = 1 / sqrt(u + 1)
 ```
 
-A destination visited `v` times gets the same kind of factor:
+A destination also receives a section-coverage factor. Playing a beat adds one
+to its heat; on every subsequent beat, all heat cools exponentially. Its
+half-life is half the track's beat count, so sections become attractive again
+after the walk spends meaningful time elsewhere without forgetting a long loop
+before that loop even completes. The planner averages heat in a window spanning
+roughly 10% of the song around a destination, then compares it with the
+song-wide mean:
 
 ```text
-destination novelty = 1 / sqrt(v + 1)
+coverage novelty = exp(-local mean heat / (global mean heat + 1))
 ```
 
 The final weight is:
@@ -88,15 +93,31 @@ The final weight is:
 ```text
 sequential weight = sequential base probability
                   × novelty(sequential uses)
-                  × novelty(source beat visits)
+                  × coverage novelty(source section)
 
 branch weight     = branch base probability / number of branches
                   × novelty(branch uses)
-                  × novelty(destination beat visits)
+                  × coverage novelty(destination section)
+                  × loop-closure novelty
 ```
 
-The square root makes the penalty gradual. A path never reaches zero weight and
-is never permanently disabled.
+This makes a repeatedly played region lose weight much faster than an
+unexplored region, while the adaptive global scale avoids permanently excluding
+any part of the track. Transition novelty remains gradual; regional coverage is
+the stronger escape pressure.
+
+Backward branches receive one additional factor because they close a loop over
+the interval between their destination and source. The first traversal is not
+penalised. Once that interval averages more than one visit per beat, the branch
+decays exponentially:
+
+```text
+loop-closure novelty = exp(-0.35 × max(interval mean heat - 1, 0))
+```
+
+Forward branches always receive a loop-closure factor of 1. This prevents a
+family of different backward edges within one short section from defeating the
+per-edge novelty tracking, while preserving fresh backward jumps.
 
 The planner adds all candidate weights, draws one random number across that
 total, and selects the interval containing the draw. Only relative weights
@@ -108,18 +129,19 @@ Suppose a beat has two branches and the current general branch probability is
 30%. The sequential path therefore starts with 70%, while each branch starts
 with 15%.
 
-Assume the following history:
+Assume the song-wide mean heat is 2 and the following local section means
+apply:
 
-| Choice | Uses | Destination visits | Resulting weight |
+| Choice | Uses | Local mean | Resulting weight |
 | --- | ---: | ---: | ---: |
-| Sequential | 0 | 4 | `0.70 / sqrt(1) / sqrt(5) = 0.313` |
-| Branch A | 3 | 8 | `0.15 / sqrt(4) / sqrt(9) = 0.025` |
-| Branch B | 0 | 1 | `0.15 / sqrt(1) / sqrt(2) = 0.106` |
+| Sequential | 0 | 4 | `0.70 / sqrt(1) × exp(-4/3) = 0.185` |
+| Branch A | 3 | 8 | `0.15 / sqrt(4) × exp(-8/3) = 0.005` |
+| Branch B | 0 | 1 | `0.15 / sqrt(1) × exp(-1/3) = 0.107` |
 
 After normalising the three weights, the approximate selection probabilities
-are 70.5% for sequential playback, 5.6% for Branch A, and 23.9% for Branch B.
-Branch B is now almost four times as likely as the overused Branch A, although
-both originally had the same base probability.
+are 62.2% for sequential playback, 1.7% for Branch A, and 36.1% for Branch B.
+Branch B is now far more likely than the overused Branch A, although both
+originally had the same base probability.
 
 ## How a repeated loop is escaped
 

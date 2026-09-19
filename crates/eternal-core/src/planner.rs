@@ -2,9 +2,13 @@ use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 use crate::BranchGraph;
 
-// Reaching the final safe branch should strongly favour another musical loop.
-// The novelty weights below still let the outro win eventually.
-const FINAL_BRANCH_PROBABILITY: f32 = 0.98;
+// Reaching the final safe branch should favour another musical loop without
+// making the outro so rare that one region dominates the session.
+const FINAL_BRANCH_PROBABILITY: f32 = 0.70;
+// Compare destinations over roughly five percent of the track. This catches a
+// repeated verse/chorus-sized region rather than only the exact landing beat.
+const COVERAGE_WINDOW_DIVISOR: usize = 20;
+const LOOP_CLOSURE_STRENGTH: f32 = 0.35;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Step {
@@ -32,7 +36,7 @@ pub struct PlaybackPlanner {
     branch_chance_delta: f32,
     sequential_uses: Vec<u32>,
     branch_uses: Vec<Vec<u32>>,
-    beat_visits: Vec<u32>,
+    beat_heat: Vec<f32>,
     rng: SmallRng,
 }
 
@@ -50,7 +54,7 @@ impl PlaybackPlanner {
             .iter()
             .map(|branches| vec![0; branches.len()])
             .collect();
-        let beat_visits = vec![0; graph.branches.len()];
+        let beat_heat = vec![0.0; graph.branches.len()];
         Self {
             graph,
             current: None,
@@ -60,7 +64,7 @@ impl PlaybackPlanner {
             branch_chance_delta: 0.018,
             sequential_uses,
             branch_uses,
-            beat_visits,
+            beat_heat,
             rng: SmallRng::seed_from_u64(seed),
         }
     }
@@ -123,7 +127,7 @@ impl PlaybackPlanner {
             destination: source,
             probability: (1.0 - branch_probability)
                 * novelty(self.sequential_uses[source])
-                * destination_novelty(self.beat_visits[source]),
+                * self.coverage_novelty(source),
             distance: None,
             is_sequential: true,
         });
@@ -137,7 +141,8 @@ impl PlaybackPlanner {
                     destination: branch.destination,
                     probability: branch_base
                         * novelty(self.branch_uses[source][index])
-                        * destination_novelty(self.beat_visits[branch.destination]),
+                        * self.coverage_novelty(branch.destination)
+                        * self.loop_closure_novelty(source, branch.destination),
                     distance: Some(branch.distance),
                     is_sequential: false,
                 }),
@@ -157,7 +162,7 @@ impl PlaybackPlanner {
         if sequential >= self.graph.branches.len() {
             let previous = self.current;
             self.current = Some(0);
-            self.beat_visits[0] += 1;
+            self.record_visit(0);
             self.branch_chance = self.minimum_branch_chance;
             return Some(Step {
                 beat: 0,
@@ -178,7 +183,7 @@ impl PlaybackPlanner {
             self.sequential_uses[source] += 1;
             (source, None)
         };
-        self.beat_visits[beat] += 1;
+        self.record_visit(beat);
         self.current = Some(beat);
         Some(Step { beat, jumped_from })
     }
@@ -198,7 +203,7 @@ impl PlaybackPlanner {
         };
         let sequential_weight = (1.0 - branch_probability)
             * novelty(self.sequential_uses[source])
-            * destination_novelty(self.beat_visits[source]);
+            * self.coverage_novelty(source);
         let branch_base = branch_probability / branch_count as f32;
         let branch_weights: Vec<_> = self.graph.branches[source]
             .iter()
@@ -206,7 +211,8 @@ impl PlaybackPlanner {
             .map(|(index, branch)| {
                 branch_base
                     * novelty(self.branch_uses[source][index])
-                    * destination_novelty(self.beat_visits[branch.destination])
+                    * self.coverage_novelty(branch.destination)
+                    * self.loop_closure_novelty(source, branch.destination)
             })
             .collect();
         let total = sequential_weight + branch_weights.iter().sum::<f32>();
@@ -227,14 +233,46 @@ impl PlaybackPlanner {
             })
             .or(Some(branch_count - 1))
     }
+
+    /// Exponentially suppress destinations inside an overplayed section. The
+    /// scale follows the song-wide mean, so the pressure is strong when a loop
+    /// forms but relaxes as overall coverage accumulates.
+    fn coverage_novelty(&self, destination: usize) -> f32 {
+        if self.beat_heat.is_empty() {
+            return 1.0;
+        }
+        let radius = (self.beat_heat.len() / COVERAGE_WINDOW_DIVISOR).max(2);
+        let start = destination.saturating_sub(radius);
+        let end = (destination + radius + 1).min(self.beat_heat.len());
+        let local_mean = self.beat_heat[start..end].iter().sum::<f32>() / (end - start) as f32;
+        let global_mean = self.beat_heat.iter().sum::<f32>() / self.beat_heat.len() as f32;
+        (-local_mean / (global_mean + 1.0)).max(-20.0).exp()
+    }
+
+    /// A backward branch closes a loop over the beats between its destination
+    /// and source. Leave its first traversal untouched, then gently reduce its
+    /// weight while that same interval remains recently replayed.
+    fn loop_closure_novelty(&self, source: usize, destination: usize) -> f32 {
+        if destination >= source {
+            return 1.0;
+        }
+        let interval = &self.beat_heat[destination..=source];
+        let mean_heat = interval.iter().sum::<f32>() / interval.len() as f32;
+        (-LOOP_CLOSURE_STRENGTH * (mean_heat - 1.0).max(0.0)).exp()
+    }
+
+    fn record_visit(&mut self, beat: usize) {
+        // Scale memory to the track: heat halves after roughly half a song.
+        let decay = 0.5_f32.powf(2.0 / self.beat_heat.len() as f32);
+        for heat in &mut self.beat_heat {
+            *heat *= decay;
+        }
+        self.beat_heat[beat] += 1.0;
+    }
 }
 
 fn novelty(uses: u32) -> f32 {
     1.0 / ((uses + 1) as f32).sqrt()
-}
-
-fn destination_novelty(visits: u32) -> f32 {
-    1.0 / ((visits + 1) as f32).sqrt()
 }
 
 impl Iterator for PlaybackPlanner {
@@ -330,11 +368,73 @@ mod tests {
     }
 
     #[test]
-    fn final_branch_remains_likely_after_repetition() {
-        let repeated_branch = FINAL_BRANCH_PROBABILITY * novelty(10) * destination_novelty(10);
-        let fresh_outro = (1.0 - FINAL_BRANCH_PROBABILITY) * novelty(0) * destination_novelty(0);
-        let branch_probability = repeated_branch / (repeated_branch + fresh_outro);
-        assert!(branch_probability > 0.75);
+    fn fresh_final_branch_is_favoured_over_the_outro() {
+        let graph = BranchGraph {
+            branches: vec![
+                vec![Branch {
+                    destination: 1,
+                    distance: 0.0,
+                }],
+                vec![],
+            ],
+            threshold: 0.0,
+            last_branch_point: 0,
+        };
+        let probabilities = PlaybackPlanner::with_seed(graph, 42).next_probabilities();
+        let branch = probabilities
+            .iter()
+            .find(|choice| !choice.is_sequential)
+            .expect("the graph has one branch");
+
+        assert!((branch.probability - 0.7).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn coverage_penalises_an_overplayed_region() {
+        let graph = BranchGraph {
+            branches: vec![vec![]; 100],
+            threshold: 0.0,
+            last_branch_point: 99,
+        };
+        let mut planner = PlaybackPlanner::with_seed(graph, 42);
+        planner.beat_heat[40..61].fill(12.0);
+
+        assert!(planner.coverage_novelty(50) < planner.coverage_novelty(10) * 0.1);
+    }
+
+    #[test]
+    fn repeated_backward_loop_loses_weight() {
+        let graph = BranchGraph {
+            branches: vec![vec![]; 20],
+            threshold: 0.0,
+            last_branch_point: 19,
+        };
+        let mut planner = PlaybackPlanner::with_seed(graph, 42);
+
+        planner.beat_heat[5..=15].fill(1.0);
+        assert!((planner.loop_closure_novelty(15, 5) - 1.0).abs() < f32::EPSILON);
+        planner.beat_heat[5..=15].fill(5.0);
+        assert!(planner.loop_closure_novelty(15, 5) < 0.3);
+        assert!((planner.loop_closure_novelty(5, 15) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn unplayed_beats_cool_and_become_attractive_again() {
+        let graph = BranchGraph {
+            branches: vec![vec![]; 100],
+            threshold: 0.0,
+            last_branch_point: 99,
+        };
+        let mut planner = PlaybackPlanner::with_seed(graph, 42);
+        planner.beat_heat[40..61].fill(5.0);
+        let hot_weight = planner.coverage_novelty(50);
+
+        for _ in 0..400 {
+            planner.record_visit(0);
+        }
+
+        assert!(planner.coverage_novelty(50) > hot_weight * 2.0);
+        assert!(planner.coverage_novelty(50) > 0.9);
     }
 
     #[test]
