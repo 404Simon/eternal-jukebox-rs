@@ -4,6 +4,11 @@ A local, dependency-light reimplementation of the Eternal Jukebox in Rust. It
 analyses an audio file, finds musically similar beats, and keeps playback going
 by jumping between them.
 
+This project builds on the original idea and implementation from
+[EternalBox/EternalJukebox](https://github.com/EternalBox/EternalJukebox). Huge
+thanks to its creators and contributors for making the Eternal Jukebox concept
+available to the community.
+
 The project is split into reusable native and browser frontends:
 
 - `eternal-core`: decoding, local beat/feature analysis, graph construction,
