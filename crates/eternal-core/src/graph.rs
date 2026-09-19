@@ -214,16 +214,17 @@ fn ensure_long_backward_branch(
     branches: &mut [Vec<Branch>],
     threshold: f32,
 ) {
-    // A bad emergency edge is worse than looping earlier in the track. Only
-    // synthesize an escape when the accepted graph has no backward edge at all.
-    if branches
-        .iter()
-        .enumerate()
-        .any(|(source, items)| items.iter().any(|branch| branch.destination < source))
-    {
+    // Short backward edges can form a tiny closed loop near the outro. Ensure
+    // there is at least one structural loop spanning a quarter of the track.
+    let minimum_span = (branches.len() / 4).max(1);
+    if branches.iter().enumerate().any(|(source, items)| {
+        items
+            .iter()
+            .any(|branch| source.saturating_sub(branch.destination) >= minimum_span)
+    }) {
         return;
     }
-    let maximum_distance = threshold * 1.25;
+    let maximum_distance = threshold * 1.75;
     let best = candidates
         .iter()
         .enumerate()
@@ -231,16 +232,17 @@ fn ensure_long_backward_branch(
             items
                 .iter()
                 .filter(move |branch| {
-                    branch.destination < source && branch.distance <= maximum_distance
+                    source.saturating_sub(branch.destination) >= minimum_span
+                        && branch.distance <= maximum_distance
                 })
-                .map(move |branch| (source - branch.destination, source, branch))
+                .map(move |branch| (source, branch))
         })
         .max_by(|left, right| {
             left.0
                 .cmp(&right.0)
-                .then_with(|| right.2.distance.total_cmp(&left.2.distance))
+                .then_with(|| right.1.distance.total_cmp(&left.1.distance))
         });
-    if let Some((_, source, branch)) = best
+    if let Some((source, branch)) = best
         && !branches[source]
             .iter()
             .any(|existing| existing.destination == branch.destination)
@@ -341,5 +343,27 @@ mod tests {
                 .enumerate()
                 .any(|(source, items)| { items.iter().any(|branch| branch.destination < source) })
         );
+    }
+
+    #[test]
+    fn emergency_branch_must_span_a_quarter_of_the_track() {
+        let mut candidates = vec![vec![]; 100];
+        candidates[90] = vec![
+            Branch {
+                destination: 82,
+                distance: 0.05,
+            },
+            Branch {
+                destination: 40,
+                distance: 0.15,
+            },
+        ];
+        let mut branches = vec![vec![]; 100];
+        branches[90].push(candidates[90][0].clone());
+
+        ensure_long_backward_branch(&candidates, &mut branches, 0.1);
+
+        assert_eq!(branches[90].len(), 2);
+        assert_eq!(branches[90][1].destination, 40);
     }
 }
