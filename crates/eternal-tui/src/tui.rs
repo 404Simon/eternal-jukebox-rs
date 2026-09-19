@@ -77,9 +77,45 @@ struct Dashboard<'a> {
     queue: VecDeque<QueuedBeat>,
     history: VecDeque<QueuedBeat>,
     choices: Vec<TransitionProbability>,
+    coverage: Vec<u32>,
     jump_count: u64,
     paused: bool,
     volume: f32,
+}
+
+impl<'a> Dashboard<'a> {
+    fn new(analysis: &'a Analysis, graph: &'a BranchGraph, input: &Path, volume: f32) -> Self {
+        Self {
+            analysis,
+            graph,
+            title: input
+                .file_name()
+                .unwrap_or(input.as_os_str())
+                .to_string_lossy()
+                .into_owned(),
+            started: Instant::now(),
+            live: None,
+            queue: VecDeque::new(),
+            history: VecDeque::new(),
+            choices: Vec::new(),
+            coverage: vec![0; analysis.beats.len()],
+            jump_count: 0,
+            paused: false,
+            volume,
+        }
+    }
+
+    fn record_finished(&mut self, finished: QueuedBeat) {
+        if let Some(visits) = self.coverage.get_mut(finished.step.beat) {
+            *visits = visits.saturating_add(1);
+        }
+        if finished.step.jumped_from.is_some() {
+            self.jump_count += 1;
+        }
+        self.history.push_front(finished.clone());
+        self.history.truncate(HISTORY_LENGTH);
+        self.live = self.queue.front().cloned().or(Some(finished));
+    }
 }
 
 pub fn play(
@@ -99,65 +135,29 @@ pub fn play(
         || PlaybackPlanner::new(graph.clone()),
         |seed| PlaybackPlanner::with_seed(graph.clone(), seed),
     );
-    let first_choices = planner.next_probabilities();
-    let first = planner
-        .next_step()
-        .context("the playback graph contains no beats")?;
-    let first_probability = selected_probability(&first_choices, &first);
-    let mut pending = QueuedBeat {
-        step: first,
-        probability: first_probability,
-    };
-    let mut dashboard = Dashboard {
-        analysis,
-        graph,
-        title: input
-            .file_name()
-            .unwrap_or(input.as_os_str())
-            .to_string_lossy()
-            .into_owned(),
-        started: Instant::now(),
-        live: None,
-        queue: VecDeque::new(),
-        history: VecDeque::new(),
-        choices: Vec::new(),
-        jump_count: 0,
-        paused: false,
-        volume: player.volume(),
-    };
+    let mut pending = plan_next(&mut planner)?;
+    let mut dashboard = Dashboard::new(analysis, graph, input, player.volume());
     let mut terminal = TerminalGuard::new()?;
 
     loop {
         while player.len() < QUEUED_BEATS {
-            let choices = planner.next_probabilities();
-            let next = planner
-                .next_step()
-                .context("the playback graph contains no beats")?;
+            let next = plan_next(&mut planner)?;
             let beat = &analysis.beats[pending.step.beat];
             let source = BeatSource::new(
                 audio,
                 beat.start,
                 beat.duration,
                 pending.step.jumped_from.is_some(),
-                next.jumped_from.is_some(),
+                next.step.jumped_from.is_some(),
             );
             player.append(source);
             dashboard.queue.push_back(pending);
-            let probability = selected_probability(&choices, &next);
-            pending = QueuedBeat {
-                step: next,
-                probability,
-            };
+            pending = next;
         }
 
         while dashboard.queue.len() > player.len().max(1) {
             if let Some(finished) = dashboard.queue.pop_front() {
-                if finished.step.jumped_from.is_some() {
-                    dashboard.jump_count += 1;
-                }
-                dashboard.history.push_front(finished.clone());
-                dashboard.history.truncate(HISTORY_LENGTH);
-                dashboard.live = dashboard.queue.front().cloned().or(Some(finished));
+                dashboard.record_finished(finished);
             }
         }
         if dashboard.live.is_none() {
@@ -224,6 +224,17 @@ pub fn play(
     }
 }
 
+fn plan_next(planner: &mut PlaybackPlanner) -> Result<QueuedBeat> {
+    let choices = planner.next_probabilities();
+    let step = planner
+        .next_step()
+        .context("the playback graph contains no beats")?;
+    Ok(QueuedBeat {
+        probability: selected_probability(&choices, &step),
+        step,
+    })
+}
+
 fn seek_beat(analysis: &Analysis, current: usize, offset_seconds: f64) -> usize {
     let current_time = analysis.beats.get(current).map_or(0.0, |beat| beat.start);
     let target_time = (current_time + offset_seconds).max(0.0);
@@ -248,7 +259,7 @@ fn draw(frame: &mut Frame, dashboard: &Dashboard<'_>) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
-            Constraint::Length(3),
+            Constraint::Length(5),
             Constraint::Min(10),
             Constraint::Length(3),
         ])
@@ -365,9 +376,14 @@ fn draw_position(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
         count - 1,
         dashboard.analysis.tempo
     );
+    let block = panel("TRACK POSITION");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
     frame.render_widget(
         Gauge::default()
-            .block(panel("TRACK POSITION"))
             .gauge_style(
                 Style::default()
                     .fg(CYAN)
@@ -376,8 +392,48 @@ fn draw_position(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
             )
             .ratio(ratio.clamp(0.0, 1.0))
             .label(label),
-        area,
+        Rect::new(inner.x, inner.y, inner.width, 1),
     );
+    if inner.height >= 2 {
+        draw_coverage(
+            frame,
+            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+            &dashboard.coverage,
+        );
+    }
+}
+
+fn draw_coverage(frame: &mut Frame, area: Rect, coverage: &[u32]) {
+    if area.width == 0 || coverage.is_empty() {
+        return;
+    }
+    let width = usize::from(area.width);
+    let bins: Vec<u32> = (0..width)
+        .map(|column| {
+            let start = column * coverage.len() / width;
+            let end = ((column + 1) * coverage.len() / width).max(start + 1);
+            coverage[start.min(coverage.len() - 1)..end.min(coverage.len())]
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let maximum = bins.iter().copied().max().unwrap_or(0).max(1) as f32;
+    let spans = bins.into_iter().map(|visits| {
+        let intensity = (visits as f32 / maximum).sqrt();
+        let color = if visits == 0 {
+            VOLUME_TRACK
+        } else {
+            Color::Rgb(
+                (70.0 + 185.0 * intensity) as u8,
+                (90.0 + 90.0 * (1.0 - intensity)) as u8,
+                (210.0 - 120.0 * intensity) as u8,
+            )
+        };
+        Span::styled("█", Style::default().fg(color))
+    });
+    frame.render_widget(Paragraph::new(Line::from(spans.collect::<Vec<_>>())), area);
 }
 
 fn draw_stitch(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
@@ -478,21 +534,6 @@ fn draw_stitch(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
         );
     }
     frame.render_widget(Paragraph::new(Line::from(queue_spans)), queue_area);
-
-    if inner.height >= 3 {
-        draw_stitch_legend(frame, Rect::new(inner.x, inner.y + 2, inner.width, 1));
-    }
-}
-
-fn draw_stitch_legend(frame: &mut Frame, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(Line::styled(
-            "JUMP  magenta     NOW  green     QUEUED  gray",
-            Style::default().fg(MUTED),
-        ))
-        .alignment(Alignment::Center),
-        area,
-    );
 }
 
 fn draw_history(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
