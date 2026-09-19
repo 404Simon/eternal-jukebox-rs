@@ -302,36 +302,40 @@ fn draw_position(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
 }
 
 fn draw_stitch(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
-    let mut spans = Vec::new();
-    for (index, item) in dashboard.history.iter().rev().take(7).enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(" ─ ", Style::default().fg(SURFACE)));
-        }
-        spans.push(Span::styled(
-            item.step.beat.to_string(),
-            Style::default().fg(if item.step.jumped_from.is_some() {
-                MAGENTA
-            } else {
-                MUTED
-            }),
-        ));
+    let block = panel("LIVE STITCH");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let number_width = dashboard
+        .analysis
+        .beats
+        .len()
+        .saturating_sub(1)
+        .to_string()
+        .len();
+    let marker_width = u16::try_from(number_width + 2)
+        .unwrap_or(u16::MAX)
+        .min(inner.width);
+    let mut stitch_width = inner.width.saturating_mul(4) / 5;
+    stitch_width = stitch_width.max(marker_width);
+    if stitch_width.saturating_sub(marker_width) % 2 != 0 {
+        stitch_width = stitch_width.saturating_sub(1).max(marker_width);
     }
-    if !spans.is_empty() {
-        spans.push(Span::styled(" ━▶ ", Style::default().fg(CYAN)));
-    }
-    if let Some(live) = &dashboard.live {
-        spans.push(Span::styled(
-            format!("[{}]", live.step.beat),
-            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
-        ));
-    }
-    for item in dashboard.queue.iter().skip(1).take(5) {
+    let stitch_x = inner.x + inner.width.saturating_sub(stitch_width) / 2;
+    let side_width = stitch_width.saturating_sub(marker_width) / 2;
+    let history_area = Rect::new(stitch_x, inner.y, side_width, 1);
+    let live_area = Rect::new(stitch_x + side_width, inner.y, marker_width, 1);
+    let queue_area = Rect::new(live_area.x + live_area.width, inner.y, side_width, 1);
+
+    let mut queue_spans = Vec::new();
+    for item in dashboard.queue.iter().skip(1) {
         let arrow = if item.step.jumped_from.is_some() {
             " ⇢ "
         } else {
             " ─ "
         };
-        spans.push(Span::styled(
+        let mut next = queue_spans.clone();
+        next.push(Span::styled(
             arrow,
             Style::default().fg(if item.step.jumped_from.is_some() {
                 MAGENTA
@@ -339,22 +343,75 @@ fn draw_stitch(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
                 SURFACE
             }),
         ));
-        spans.push(Span::styled(
-            item.step.beat.to_string(),
+        next.push(Span::styled(
+            format!("{:0number_width$}", item.step.beat),
             Style::default().fg(MUTED),
         ));
+        if Line::from(next.clone()).width() > usize::from(queue_area.width) {
+            break;
+        }
+        queue_spans = next;
     }
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(spans),
-            Line::raw(""),
-            Line::styled(
-                "JUMP  magenta     NOW  green     QUEUED  gray",
-                Style::default().fg(MUTED),
+
+    let mut history_spans = Vec::new();
+    for item in &dashboard.history {
+        let mut next = vec![
+            Span::styled(
+                format!("{:0number_width$}", item.step.beat),
+                Style::default().fg(if item.step.jumped_from.is_some() {
+                    MAGENTA
+                } else {
+                    MUTED
+                }),
             ),
-        ])
-        .alignment(Alignment::Center)
-        .block(panel("LIVE STITCH")),
+            Span::styled(
+                if history_spans.is_empty() {
+                    " ━▶ "
+                } else {
+                    " ─ "
+                },
+                Style::default().fg(if history_spans.is_empty() {
+                    CYAN
+                } else {
+                    SURFACE
+                }),
+            ),
+        ];
+        next.extend(history_spans.iter().cloned());
+        if Line::from(next.clone()).width() > usize::from(history_area.width) {
+            break;
+        }
+        history_spans = next;
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(history_spans)).alignment(Alignment::Right),
+        history_area,
+    );
+    if let Some(live) = &dashboard.live {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                format!("[{:0number_width$}]", live.step.beat),
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Center),
+            live_area,
+        );
+    }
+    frame.render_widget(Paragraph::new(Line::from(queue_spans)), queue_area);
+
+    if inner.height >= 3 {
+        draw_stitch_legend(frame, Rect::new(inner.x, inner.y + 2, inner.width, 1));
+    }
+}
+
+fn draw_stitch_legend(frame: &mut Frame, area: Rect) {
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            "JUMP  magenta     NOW  green     QUEUED  gray",
+            Style::default().fg(MUTED),
+        ))
+        .alignment(Alignment::Center),
         area,
     );
 }
