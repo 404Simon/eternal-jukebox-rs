@@ -1,4 +1,5 @@
 use rand::{Rng, SeedableRng, rngs::SmallRng};
+use serde::Serialize;
 
 use crate::BranchGraph;
 
@@ -17,7 +18,7 @@ pub struct Step {
 }
 
 /// A possible choice for the next beat, using the planner's live novelty state.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TransitionProbability {
     pub source: usize,
     pub destination: usize,

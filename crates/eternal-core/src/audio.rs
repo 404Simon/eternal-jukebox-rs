@@ -1,9 +1,8 @@
-use std::{
-    fs::File,
-    path::Path,
-    sync::{Arc, OnceLock},
-};
+use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::{fs::File, path::Path, sync::OnceLock};
+#[cfg(not(target_arch = "wasm32"))]
 use symphonia::core::{
     audio::SampleBuffer,
     codecs::{CodecRegistry, DecoderOptions},
@@ -13,9 +12,12 @@ use symphonia::core::{
     meta::MetadataOptions,
     probe::Hint,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use symphonia_adapter_libopus::OpusDecoder;
+#[cfg(not(target_arch = "wasm32"))]
 use thiserror::Error;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn codecs() -> &'static CodecRegistry {
     static CODECS: OnceLock<CodecRegistry> = OnceLock::new();
     CODECS.get_or_init(|| {
@@ -36,6 +38,15 @@ pub struct Audio {
 
 impl Audio {
     #[must_use]
+    pub fn new(samples: impl Into<Arc<[f32]>>, sample_rate: u32, channels: u16) -> Self {
+        Self {
+            samples: samples.into(),
+            sample_rate,
+            channels,
+        }
+    }
+
+    #[must_use]
     pub fn duration_seconds(&self) -> f64 {
         self.samples.len() as f64 / f64::from(self.channels) / f64::from(self.sample_rate)
     }
@@ -51,6 +62,7 @@ impl Audio {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Error)]
 pub enum AudioError {
     #[error("could not open {path}: {source}")]
@@ -72,6 +84,7 @@ pub enum AudioError {
 }
 
 /// Decode an MP3, Opus, or another enabled audio format into interleaved PCM.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn decode(path: impl AsRef<Path>) -> Result<Audio, AudioError> {
     let path = path.as_ref();
     let file = File::open(path).map_err(|source| AudioError::Open {
@@ -130,10 +143,13 @@ pub fn decode(path: impl AsRef<Path>) -> Result<Audio, AudioError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
     use symphonia::core::codecs::CODEC_TYPE_OPUS;
 
+    #[cfg(not(target_arch = "wasm32"))]
     use super::codecs;
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn opus_decoder_is_registered() {
         assert!(codecs().get_codec(CODEC_TYPE_OPUS).is_some());

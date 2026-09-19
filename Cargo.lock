@@ -419,6 +419,7 @@ dependencies = [
 name = "eternal-core"
 version = "0.1.0"
 dependencies = [
+ "getrandom",
  "rand",
  "realfft",
  "serde",
@@ -450,6 +451,16 @@ dependencies = [
  "rand",
  "ratatui",
  "rodio",
+]
+
+[[package]]
+name = "eternal-web"
+version = "0.1.0"
+dependencies = [
+ "eternal-core",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -501,9 +512,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
