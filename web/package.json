@@ -8,6 +8,7 @@
     "wasm": "wasm-pack build ../crates/eternal-web --target web --out-dir ../../web/src/wasm --release",
     "dev": "vite",
     "build": "pnpm wasm && tsc -b && vite build",
+    "build:pages": "pnpm wasm && tsc -b && vite build --base \"$VITE_BASE_PATH\"",
     "check": "tsc -b --pretty false",
     "lint": "eslint .",
     "preview": "vite preview"
