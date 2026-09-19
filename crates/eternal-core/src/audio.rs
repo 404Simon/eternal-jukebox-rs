@@ -1,4 +1,8 @@
-use std::{fs::File, path::Path, sync::OnceLock};
+use std::{
+    fs::File,
+    path::Path,
+    sync::{Arc, OnceLock},
+};
 
 use symphonia::core::{
     audio::SampleBuffer,
@@ -25,7 +29,7 @@ fn codecs() -> &'static CodecRegistry {
 /// Fully decoded, interleaved PCM audio.
 #[derive(Clone, Debug)]
 pub struct Audio {
-    pub samples: Vec<f32>,
+    pub samples: Arc<[f32]>,
     pub sample_rate: u32,
     pub channels: u16,
 }
@@ -118,7 +122,7 @@ pub fn decode(path: impl AsRef<Path>) -> Result<Audio, AudioError> {
 
     let spec = signal_spec.ok_or(AudioError::MissingSignalSpec)?;
     Ok(Audio {
-        samples: output,
+        samples: output.into(),
         sample_rate: spec.rate,
         channels: spec.channels.count() as u16,
     })

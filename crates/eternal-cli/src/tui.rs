@@ -21,9 +21,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Row, Table},
 };
-use rodio::{DeviceSinkBuilder, Player, buffer::SamplesBuffer};
+use rodio::{DeviceSinkBuilder, Player};
 
-use crate::playback::beat_samples;
+use crate::playback::BeatSource;
 
 const QUEUED_BEATS: usize = 8;
 const HISTORY_LENGTH: usize = 256;
@@ -88,8 +88,8 @@ pub fn play(
         .context("could not open the default audio output device")?;
     output.log_on_drop(false);
     let player = Player::connect_new(output.mixer());
-    let channels = NonZero::new(audio.channels).context("audio has no channels")?;
-    let sample_rate = NonZero::new(audio.sample_rate).context("audio has no sample rate")?;
+    NonZero::new(audio.channels).context("audio has no channels")?;
+    NonZero::new(audio.sample_rate).context("audio has no sample rate")?;
     let mut planner = seed.map_or_else(
         || PlaybackPlanner::new(graph.clone()),
         |seed| PlaybackPlanner::with_seed(graph.clone(), seed),
@@ -128,14 +128,14 @@ pub fn play(
                 .next_step()
                 .context("the playback graph contains no beats")?;
             let beat = &analysis.beats[pending.step.beat];
-            let samples = beat_samples(
+            let source = BeatSource::new(
                 audio,
                 beat.start,
                 beat.duration,
                 pending.step.jumped_from.is_some(),
                 next.jumped_from.is_some(),
             );
-            player.append(SamplesBuffer::new(channels, sample_rate, samples));
+            player.append(source);
             dashboard.queue.push_back(pending);
             let probability = selected_probability(&choices, &next);
             pending = QueuedBeat {
