@@ -70,7 +70,13 @@ pub enum AnalysisError {
 #[derive(Clone)]
 struct Frame {
     time: f64,
-    spectrum: Vec<f32>,
+    chroma: [f32; 12],
+    spectral_energy: f32,
+    weighted_frequency: f32,
+    weighted_squared_frequency: f32,
+    geometric_log_sum: f32,
+    rolloff: f32,
+    bins: usize,
     rms: f32,
     flux: f32,
 }
@@ -89,13 +95,12 @@ pub fn analyse(audio: &Audio, config: &AnalysisConfig) -> Result<Analysis, Analy
         return Err(AnalysisError::InvalidConfig);
     }
 
-    let mono = audio.mono();
-    let frames = spectral_frames(&mono, audio.sample_rate, config)?;
+    let frames = spectral_frames(audio, config)?;
     let onset = onset_envelope(&frames);
     let period = estimate_period(&onset, audio.sample_rate, config);
     let first = estimate_phase(&onset, period);
     let beat_frames = track_beat_positions(&onset, first, period);
-    let beats = trim_silent_boundaries(describe_beats(&frames, &beat_frames, audio, config));
+    let beats = trim_silent_boundaries(describe_beats(&frames, &beat_frames, audio));
     let seconds_per_beat = period as f32 * config.hop_size as f32 / audio.sample_rate as f32;
 
     Ok(Analysis {
@@ -107,49 +112,94 @@ pub fn analyse(audio: &Audio, config: &AnalysisConfig) -> Result<Analysis, Analy
     })
 }
 
-fn spectral_frames(
-    mono: &[f32],
-    sample_rate: u32,
-    config: &AnalysisConfig,
-) -> Result<Vec<Frame>, AnalysisError> {
+fn spectral_frames(audio: &Audio, config: &AnalysisConfig) -> Result<Vec<Frame>, AnalysisError> {
     let mut planner = RealFftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(config.frame_size);
     let mut input = fft.make_input_vec();
     let mut spectrum = fft.make_output_vec();
     let mut previous = vec![0.0; spectrum.len()];
+    let mut magnitudes = vec![0.0; spectrum.len()];
     let window: Vec<f32> = (0..config.frame_size)
         .map(|index| 0.5 - 0.5 * (TAU * index as f32 / config.frame_size as f32).cos())
         .collect();
     let mut frames = Vec::new();
 
-    for (frame_index, chunk) in mono
-        .windows(config.frame_size)
+    let channels = usize::from(audio.channels);
+    let sample_rate = audio.sample_rate;
+    let frame_count = audio.samples.len() / channels;
+    for (frame_index, start) in (0..=frame_count.saturating_sub(config.frame_size))
         .step_by(config.hop_size)
         .enumerate()
     {
-        for ((output, sample), weight) in input.iter_mut().zip(chunk).zip(&window) {
+        let mut squared_samples = 0.0;
+        for (offset, (output, weight)) in input.iter_mut().zip(&window).enumerate() {
+            let sample = audio.samples
+                [(start + offset) * channels..(start + offset + 1) * channels]
+                .iter()
+                .sum::<f32>()
+                / channels as f32;
             *output = sample * weight;
+            squared_samples += sample * sample;
         }
         fft.process(&mut input, &mut spectrum)
             .map_err(|error| AnalysisError::Fft(error.to_string()))?;
-        let magnitudes: Vec<f32> = spectrum.iter().map(|bin| bin.norm()).collect();
+        for (magnitude, bin) in magnitudes.iter_mut().zip(&spectrum) {
+            *magnitude = bin.norm();
+        }
         let flux = magnitudes
             .iter()
             .zip(&previous)
             .map(|(current, old)| (current - old).max(0.0))
             .sum::<f32>()
             / magnitudes.len() as f32;
-        let rms =
-            (chunk.iter().map(|sample| sample * sample).sum::<f32>() / chunk.len() as f32).sqrt();
+        let rms = (squared_samples / config.frame_size as f32).sqrt();
+        let summary = summarise_spectrum(&magnitudes, sample_rate, config.frame_size);
         frames.push(Frame {
             time: (frame_index * config.hop_size) as f64 / f64::from(sample_rate),
-            spectrum: magnitudes.clone(),
+            chroma: summary.chroma,
+            spectral_energy: summary.spectral_energy,
+            weighted_frequency: summary.weighted_frequency,
+            weighted_squared_frequency: summary.weighted_squared_frequency,
+            geometric_log_sum: summary.geometric_log_sum,
+            rolloff: summary.rolloff,
+            bins: summary.bins,
             rms,
             flux,
         });
-        previous = magnitudes;
+        std::mem::swap(&mut previous, &mut magnitudes);
     }
     Ok(frames)
+}
+
+fn summarise_spectrum(magnitudes: &[f32], sample_rate: u32, fft_size: usize) -> Frame {
+    let mut frame = Frame {
+        time: 0.0,
+        chroma: [0.0; 12],
+        spectral_energy: magnitudes.iter().skip(1).sum(),
+        weighted_frequency: 0.0,
+        weighted_squared_frequency: 0.0,
+        geometric_log_sum: 0.0,
+        rolloff: 0.0,
+        bins: magnitudes.len().saturating_sub(1),
+        rms: 0.0,
+        flux: 0.0,
+    };
+    let mut cumulative_energy = 0.0;
+    for (bin, &magnitude) in magnitudes.iter().enumerate().skip(1) {
+        let frequency = bin as f32 * sample_rate as f32 / fft_size as f32;
+        if frequency >= 27.5 {
+            let midi = 69.0 + 12.0 * (frequency / 440.0).log2();
+            frame.chroma[(midi.round() as i32).rem_euclid(12) as usize] += magnitude;
+        }
+        frame.weighted_frequency += frequency * magnitude;
+        frame.weighted_squared_frequency += frequency * frequency * magnitude;
+        frame.geometric_log_sum += (magnitude + 1.0e-12).ln();
+        cumulative_energy += magnitude;
+        if frame.rolloff == 0.0 && cumulative_energy >= frame.spectral_energy * 0.85 {
+            frame.rolloff = frequency;
+        }
+    }
+    frame
 }
 
 fn onset_envelope(frames: &[Frame]) -> Vec<f32> {
@@ -249,12 +299,7 @@ fn onset_score(strength: f32, position: usize, predicted: usize, radius: usize) 
     strength - 0.35 * displacement.powi(2)
 }
 
-fn describe_beats(
-    frames: &[Frame],
-    positions: &[usize],
-    audio: &Audio,
-    config: &AnalysisConfig,
-) -> Vec<Beat> {
+fn describe_beats(frames: &[Frame], positions: &[usize], audio: &Audio) -> Vec<Beat> {
     positions
         .iter()
         .enumerate()
@@ -269,11 +314,10 @@ fn describe_beats(
                 index,
                 start: start_seconds,
                 duration: end_seconds - start_seconds,
-                features: aggregate_features(frame_slice, audio.sample_rate, config.frame_size),
+                features: aggregate_features(frame_slice, audio.sample_rate),
                 start_features: aggregate_features(
                     &frame_slice[..(frame_slice.len() / 3).max(1)],
                     audio.sample_rate,
-                    config.frame_size,
                 ),
             }
         })
@@ -305,7 +349,7 @@ fn trim_silent_boundaries(mut beats: Vec<Beat>) -> Vec<Beat> {
     audible
 }
 
-fn aggregate_features(frames: &[Frame], sample_rate: u32, fft_size: usize) -> Features {
+fn aggregate_features(frames: &[Frame], sample_rate: u32) -> Features {
     let mut chroma = [0.0; 12];
     let mut weighted_frequency = 0.0;
     let mut spectral_energy = 0.0;
@@ -316,34 +360,20 @@ fn aggregate_features(frames: &[Frame], sample_rate: u32, fft_size: usize) -> Fe
     let nyquist = sample_rate as f32 / 2.0;
 
     for frame in frames {
-        let frame_energy = frame.spectrum.iter().skip(1).sum::<f32>();
-        let mut cumulative_energy = 0.0;
-        let mut rolloff = 0.0;
-        for (bin, &magnitude) in frame.spectrum.iter().enumerate().skip(1) {
-            let frequency = bin as f32 * sample_rate as f32 / fft_size as f32;
-            if frequency >= 27.5 {
-                let midi = 69.0 + 12.0 * (frequency / 440.0).log2();
-                let pitch_class = midi.round() as i32;
-                chroma[pitch_class.rem_euclid(12) as usize] += magnitude;
-            }
-            weighted_frequency += frequency * magnitude;
-            spectral_energy += magnitude;
-            geometric_log_sum += (magnitude + 1.0e-12).ln();
-            bins += 1;
-            cumulative_energy += magnitude;
-            if rolloff == 0.0 && cumulative_energy >= frame_energy * 0.85 {
-                rolloff = frequency;
-            }
+        for (total, value) in chroma.iter_mut().zip(frame.chroma) {
+            *total += value;
         }
-        rolloff_sum += rolloff;
+        weighted_frequency += frame.weighted_frequency;
+        spectral_energy += frame.spectral_energy;
+        squared_deviation += frame.weighted_squared_frequency;
+        geometric_log_sum += frame.geometric_log_sum;
+        rolloff_sum += frame.rolloff;
+        bins += frame.bins;
     }
     let centroid = weighted_frequency / spectral_energy.max(1.0e-12);
-    for frame in frames {
-        for (bin, &magnitude) in frame.spectrum.iter().enumerate().skip(1) {
-            let frequency = bin as f32 * sample_rate as f32 / fft_size as f32;
-            squared_deviation += (frequency - centroid).powi(2) * magnitude;
-        }
-    }
+    squared_deviation +=
+        centroid * centroid * spectral_energy - 2.0 * centroid * weighted_frequency;
+    squared_deviation = squared_deviation.max(0.0);
     let bandwidth = (squared_deviation / spectral_energy.max(1.0e-12)).sqrt();
     let arithmetic_mean = spectral_energy / bins.max(1) as f32;
     let flatness = (geometric_log_sum / bins.max(1) as f32).exp() / arithmetic_mean.max(1.0e-12);
