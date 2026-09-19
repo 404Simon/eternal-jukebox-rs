@@ -127,17 +127,24 @@ fn spectral_frames(audio: &Audio, config: &AnalysisConfig) -> Result<Vec<Frame>,
     let channels = usize::from(audio.channels);
     let sample_rate = audio.sample_rate;
     let frame_count = audio.samples.len() / channels;
+    let mut mono = vec![0.0; config.frame_size];
     for (frame_index, start) in (0..=frame_count.saturating_sub(config.frame_size))
         .step_by(config.hop_size)
         .enumerate()
     {
+        if frame_index == 0 || config.hop_size >= config.frame_size {
+            downmix_into(audio, start, &mut mono);
+        } else {
+            let retained = config.frame_size - config.hop_size;
+            mono.copy_within(config.hop_size.., 0);
+            downmix_into(
+                audio,
+                start + retained,
+                &mut mono[retained..config.frame_size],
+            );
+        }
         let mut squared_samples = 0.0;
-        for (offset, (output, weight)) in input.iter_mut().zip(&window).enumerate() {
-            let sample = audio.samples
-                [(start + offset) * channels..(start + offset + 1) * channels]
-                .iter()
-                .sum::<f32>()
-                / channels as f32;
+        for ((output, &sample), weight) in input.iter_mut().zip(&mono).zip(&window) {
             *output = sample * weight;
             squared_samples += sample * sample;
         }
@@ -169,6 +176,17 @@ fn spectral_frames(audio: &Audio, config: &AnalysisConfig) -> Result<Vec<Frame>,
         std::mem::swap(&mut previous, &mut magnitudes);
     }
     Ok(frames)
+}
+
+fn downmix_into(audio: &Audio, start_frame: usize, output: &mut [f32]) {
+    let channels = usize::from(audio.channels);
+    for (offset, sample) in output.iter_mut().enumerate() {
+        *sample = audio.samples
+            [(start_frame + offset) * channels..(start_frame + offset + 1) * channels]
+            .iter()
+            .sum::<f32>()
+            / channels as f32;
+    }
 }
 
 fn summarise_spectrum(magnitudes: &[f32], sample_rate: u32, fft_size: usize) -> Frame {

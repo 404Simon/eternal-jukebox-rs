@@ -51,25 +51,25 @@ impl BranchGraph {
             .beats
             .iter()
             .map(|source| {
-                let mut nearest: Vec<_> = analysis
-                    .beats
-                    .iter()
-                    .filter(|destination| {
-                        source.index.abs_diff(destination.index) >= config.minimum_separation
-                            && source.index % 4 == destination.index % 4
-                    })
-                    .map(|destination| Branch {
-                        destination: destination.index,
-                        distance: transition_distance(
-                            analysis,
-                            source.index,
-                            destination.index,
-                            &normalisation,
-                        ),
-                    })
-                    .collect();
-                nearest.sort_by(|left, right| left.distance.total_cmp(&right.distance));
-                nearest.truncate(config.maximum_branches);
+                let mut nearest = Vec::new();
+                for destination in analysis.beats.iter().filter(|destination| {
+                    source.index.abs_diff(destination.index) >= config.minimum_separation
+                        && source.index % 4 == destination.index % 4
+                }) {
+                    retain_nearest(
+                        &mut nearest,
+                        Branch {
+                            destination: destination.index,
+                            distance: transition_distance(
+                                analysis,
+                                source.index,
+                                destination.index,
+                                &normalisation,
+                            ),
+                        },
+                        config.maximum_branches,
+                    );
+                }
                 nearest
             })
             .collect();
@@ -102,6 +102,22 @@ impl BranchGraph {
     pub fn branch_count(&self) -> usize {
         self.branches.iter().map(Vec::len).sum()
     }
+}
+
+fn retain_nearest(nearest: &mut Vec<Branch>, branch: Branch, limit: usize) {
+    if limit == 0
+        || nearest.last().is_some_and(|last| {
+            nearest.len() == limit
+                && branch.distance.total_cmp(&last.distance) != std::cmp::Ordering::Less
+        })
+    {
+        return;
+    }
+    let position = nearest.partition_point(|existing| {
+        existing.distance.total_cmp(&branch.distance) != std::cmp::Ordering::Greater
+    });
+    nearest.insert(position, branch);
+    nearest.truncate(limit);
 }
 
 struct Normalisation {
@@ -252,6 +268,46 @@ fn remove_end_traps(branches: &mut [Vec<Branch>], last_branch_point: usize) {
 mod tests {
     use super::*;
     use crate::Beat;
+
+    #[test]
+    fn bounded_selection_matches_stable_sort_and_truncate() {
+        let distances = [3.0, 1.0, 2.0, 1.0, f32::NAN, -0.0, 0.0, 0.5];
+        for limit in 0..=distances.len() {
+            let mut expected: Vec<_> = distances
+                .iter()
+                .enumerate()
+                .map(|(destination, &distance)| Branch {
+                    destination,
+                    distance,
+                })
+                .collect();
+            expected.sort_by(|left, right| left.distance.total_cmp(&right.distance));
+            expected.truncate(limit);
+
+            let mut actual = Vec::new();
+            for (destination, &distance) in distances.iter().enumerate() {
+                retain_nearest(
+                    &mut actual,
+                    Branch {
+                        destination,
+                        distance,
+                    },
+                    limit,
+                );
+            }
+
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(|branch| (branch.destination, branch.distance.to_bits()))
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|branch| (branch.destination, branch.distance.to_bits()))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
 
     #[test]
     fn graph_contains_a_backward_escape() {
