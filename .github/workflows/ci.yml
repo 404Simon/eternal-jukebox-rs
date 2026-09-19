@@ -61,9 +61,7 @@ jobs:
           package_json_file: web/package.json
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Type-check
-        run: pnpm check
       - name: Lint
         run: pnpm lint
-      - name: Build
+      - name: Build and type-check
         run: pnpm build
