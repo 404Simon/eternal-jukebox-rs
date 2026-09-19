@@ -27,10 +27,14 @@ use crate::audio_source::BeatSource;
 
 const QUEUED_BEATS: usize = 8;
 const HISTORY_LENGTH: usize = 256;
+const VOLUME_STEP: f32 = 0.05;
+const MAX_VOLUME: f32 = 2.0;
+const SEEK_SECONDS: f64 = 10.0;
 
 const INK: Color = Color::Rgb(205, 214, 244);
 const MUTED: Color = Color::Rgb(108, 112, 134);
 const SURFACE: Color = Color::Rgb(49, 50, 68);
+const VOLUME_TRACK: Color = Color::Rgb(69, 71, 90);
 const CYAN: Color = Color::Rgb(137, 220, 235);
 const GREEN: Color = Color::Rgb(166, 227, 161);
 const MAGENTA: Color = Color::Rgb(203, 166, 247);
@@ -75,6 +79,7 @@ struct Dashboard<'a> {
     choices: Vec<TransitionProbability>,
     jump_count: u64,
     paused: bool,
+    volume: f32,
 }
 
 pub fn play(
@@ -118,6 +123,7 @@ pub fn play(
         choices: Vec::new(),
         jump_count: 0,
         paused: false,
+        volume: player.volume(),
     };
     let mut terminal = TerminalGuard::new()?;
 
@@ -164,12 +170,12 @@ pub fn play(
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
-            if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+            if key.code == KeyCode::Char('q')
                 || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
             {
                 return Ok(());
             }
-            if matches!(key.code, KeyCode::Char('p' | ' ')) {
+            if key.code == KeyCode::Char('p') {
                 dashboard.paused = !dashboard.paused;
                 if dashboard.paused {
                     player.pause();
@@ -177,8 +183,55 @@ pub fn play(
                     player.play();
                 }
             }
+            if matches!(key.code, KeyCode::Char(',' | '.')) {
+                let direction = if key.code == KeyCode::Char('.') {
+                    1.0
+                } else {
+                    -1.0
+                };
+                dashboard.volume =
+                    (dashboard.volume + direction * VOLUME_STEP).clamp(0.0, MAX_VOLUME);
+                player.set_volume(dashboard.volume);
+            }
+            if matches!(key.code, KeyCode::Char('f' | 'b')) {
+                let current = dashboard.live.as_ref().map_or(0, |item| item.step.beat);
+                let target = seek_beat(
+                    analysis,
+                    current,
+                    if key.code == KeyCode::Char('f') {
+                        SEEK_SECONDS
+                    } else {
+                        -SEEK_SECONDS
+                    },
+                );
+                let _ = planner.continue_from(target);
+                pending = QueuedBeat {
+                    step: Step {
+                        beat: target,
+                        jumped_from: None,
+                    },
+                    probability: 1.0,
+                };
+                player.clear();
+                if !dashboard.paused {
+                    player.play();
+                }
+                dashboard.queue.clear();
+                dashboard.live = Some(pending.clone());
+                dashboard.choices = planner.next_probabilities();
+            }
         }
     }
+}
+
+fn seek_beat(analysis: &Analysis, current: usize, offset_seconds: f64) -> usize {
+    let current_time = analysis.beats.get(current).map_or(0.0, |beat| beat.start);
+    let target_time = (current_time + offset_seconds).max(0.0);
+    analysis
+        .beats
+        .partition_point(|beat| beat.start <= target_time)
+        .saturating_sub(1)
+        .min(analysis.beats.len().saturating_sub(1))
 }
 
 fn selected_probability(choices: &[TransitionProbability], step: &Step) -> f32 {
@@ -267,6 +320,32 @@ fn draw_header(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
         Paragraph::new(vec![title, status]).block(panel("NOW PLAYING")),
         area,
     );
+    let volume_width = 28.min(area.width.saturating_sub(2));
+    if volume_width > 0 && area.height > 2 {
+        let bar_width = 14;
+        let filled = ((dashboard.volume / MAX_VOLUME) * bar_width as f32).round() as usize;
+        let volume = Line::from(vec![
+            Span::styled("VOL ", Style::default().fg(YELLOW)),
+            Span::styled("█".repeat(filled), Style::default().fg(YELLOW)),
+            Span::styled(
+                "░".repeat(bar_width - filled),
+                Style::default().fg(VOLUME_TRACK),
+            ),
+            Span::styled(
+                format!(" {:>3}%", (dashboard.volume * 100.0).round() as u16),
+                Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        frame.render_widget(
+            Paragraph::new(volume).alignment(Alignment::Right),
+            Rect::new(
+                area.right().saturating_sub(volume_width + 1),
+                area.y + 1,
+                volume_width,
+                1,
+            ),
+        );
+    }
 }
 
 fn draw_position(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
@@ -507,7 +586,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
             Style::default().fg(CYAN),
         ),
         Span::styled(
-            "                         p / space  pause     q / esc  quit  ",
+            "    ◀ b  seek  f ▶     − ,  volume  . +     p  pause     q  quit  ",
             Style::default().fg(YELLOW),
         ),
     ]);

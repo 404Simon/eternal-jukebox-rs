@@ -70,6 +70,17 @@ impl PlaybackPlanner {
         &self.graph
     }
 
+    /// Continue planning after `beat`, preserving the planner's novelty state.
+    ///
+    /// This is useful when playback is repositioned independently of the walk.
+    pub fn continue_from(&mut self, beat: usize) -> bool {
+        if beat >= self.graph.branches.len() {
+            return false;
+        }
+        self.current = Some(beat);
+        true
+    }
+
     /// Return the choices that the next call to [`Self::next_step`] will make.
     #[must_use]
     pub fn next_probabilities(&self) -> Vec<TransitionProbability> {
