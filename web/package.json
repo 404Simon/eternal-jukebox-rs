@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "packageManager": "pnpm@10.28.0",
+  "packageManager": "pnpm@12.5.1",
   "scripts": {
     "wasm": "wasm-pack build ../crates/eternal-web --target web --out-dir ../../web/src/wasm --release",
     "dev": "vite",
