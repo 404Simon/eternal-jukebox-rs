@@ -4,11 +4,13 @@ A local, dependency-light reimplementation of the Eternal Jukebox in Rust. It
 analyses an audio file, finds musically similar beats, and keeps playback going
 by jumping between them.
 
-The project is split into two crates:
+The project is split into reusable native and browser frontends:
 
 - `eternal-core`: decoding, local beat/feature analysis, graph construction,
   and the infinite playback planner.
 - `eternal-tui`: the interactive `eternal` terminal application and audio output.
+- `eternal-web`: a small WebAssembly interface over the same analysis and planner.
+- `web`: a Vite + React client that decodes and plays audio with the Web Audio API.
 
 ## Quick start
 
@@ -81,6 +83,25 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+### Browser app
+
+The web app processes every file locally. Browser-native audio decoding and
+playback surround the Rust analysis and planning engine, which is compiled to
+WebAssembly. Analysis runs in a Web Worker so long tracks do not freeze the UI.
+
+Install `wasm-pack` once, then start Vite:
+
+```sh
+cargo install wasm-pack --locked
+cd web
+pnpm install
+pnpm wasm
+pnpm dev
+```
+
+`pnpm build` regenerates the release WebAssembly package, type-checks the app,
+and creates the production bundle in `web/dist`.
 
 ## License
 
