@@ -31,6 +31,21 @@ button,input { font:inherit; } button,a { color:inherit; } button { cursor:point
 .upload-error { margin:15px 5px 0; color:var(--red); font-size:13px; }
 .landing-footer { width:min(1180px,calc(100% - 40px)); margin:auto; padding:22px 0 28px; display:flex; gap:30px; border-top:1px solid #34344b80; color:var(--muted); font:600 10px/1 ui-monospace,monospace; text-transform:uppercase; letter-spacing:.1em; }
 
+/* Beat paths share the progress bar's beat axis. */
+.beat-connections { background:radial-gradient(ellipse at 50% 100%,#89dceb06,transparent 70%); }
+.beat-connections svg { display:block; width:100%; height:clamp(150px,22vw,250px); overflow:visible; }
+.connection-live { stroke:var(--mauve); opacity:.5; }
+.connection-next { stroke:var(--yellow); }
+.connection-next-halo { stroke:var(--yellow); opacity:.07; }
+
+.progress-track .track-seek { position:absolute; z-index:1; left:-7px; top:50%; width:calc(100% + 14px); height:32px; margin:0; transform:translateY(-50%); appearance:none; background:transparent; cursor:pointer; }
+.track-seek::-webkit-slider-runnable-track { height:6px; background:transparent; }
+.track-seek::-moz-range-track { height:6px; background:transparent; }
+.track-seek::-webkit-slider-thumb { appearance:none; width:14px; height:14px; margin-top:-4px; border:0; border-radius:50%; background:transparent; }
+.track-seek::-moz-range-thumb { width:14px; height:14px; border:0; border-radius:50%; background:transparent; }
+.track-seek:focus-visible { outline:2px solid var(--cyan); outline-offset:3px; border-radius:6px; }
+.progress-track:has(.track-seek:hover)>b,.progress-track:has(.track-seek:focus-visible)>b { box-shadow:0 0 0 5px #a6e3a122,0 0 16px #a6e3a166; }
+
 /* Player */
 .app-page { width:min(1180px,calc(100% - 40px)); min-height:100vh; margin:auto; padding-bottom:34px; }
 .app-page .site-nav { width:100%; } .dashboard-nav>div{display:flex;align-items:center;gap:12px} .play-state.is-paused{color:var(--yellow);border-color:#f9e2af2e;background:#f9e2af0d}

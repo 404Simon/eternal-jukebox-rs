@@ -1,4 +1,5 @@
 mod audio_source;
+mod connections;
 mod tui;
 
 use anyhow::{Result, bail};

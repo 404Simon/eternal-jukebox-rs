@@ -105,15 +105,22 @@ function App() {
     }
   }, [volume])
 
+  const seekToBeat = useCallback((beat: number) => {
+    if (!track || !planner.current || !player.current || !Number.isFinite(beat)) return
+    const target = Math.max(0, Math.min(track.analysis.beats.length - 1, Math.round(beat)))
+    planner.current.continue_from(target)
+    player.current.seek()
+    setLive({ beat: target, jumpedFrom: null, probability: 1 })
+  }, [track])
+
   const seek = useCallback((seconds: number) => {
     if (!track || !live || !planner.current) return
     const current = track.analysis.beats[live.beat]?.start ?? 0
     const targetTime = Math.max(0, current + seconds)
     let target = track.analysis.beats.findLastIndex((beat) => beat.start <= targetTime)
     target = Math.max(0, target)
-    planner.current.continue_from(target)
-    player.current?.seek()
-  }, [live, track])
+    seekToBeat(target)
+  }, [live, track, seekToBeat])
 
   const toggle = useCallback(async () => {
     await player.current?.toggle()
@@ -158,7 +165,7 @@ function App() {
   return <Dashboard
     choices={choices} coverage={coverage} fileName={fileName} history={history}
     jumpCount={jumpCount} live={live} paused={paused} queue={queue} sessionSeconds={sessionSeconds}
-    track={track} volume={volume} onChangeTrack={changeTrack} onSeek={seek}
+    track={track} volume={volume} onChangeTrack={changeTrack} onSeek={seek} onSeekToBeat={seekToBeat}
     onToggle={() => void toggle()} onVolume={changeVolume}
   />
 }

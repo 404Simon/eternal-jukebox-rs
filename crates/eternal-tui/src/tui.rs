@@ -35,10 +35,10 @@ const INK: Color = Color::Rgb(205, 214, 244);
 const MUTED: Color = Color::Rgb(108, 112, 134);
 const SURFACE: Color = Color::Rgb(49, 50, 68);
 const VOLUME_TRACK: Color = Color::Rgb(69, 71, 90);
-const CYAN: Color = Color::Rgb(137, 220, 235);
+pub(crate) const CYAN: Color = Color::Rgb(137, 220, 235);
 const GREEN: Color = Color::Rgb(166, 227, 161);
-const MAGENTA: Color = Color::Rgb(203, 166, 247);
-const YELLOW: Color = Color::Rgb(249, 226, 175);
+pub(crate) const MAGENTA: Color = Color::Rgb(203, 166, 247);
+pub(crate) const YELLOW: Color = Color::Rgb(249, 226, 175);
 
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -259,7 +259,7 @@ fn draw(frame: &mut Frame, dashboard: &Dashboard<'_>) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
-            Constraint::Length(5),
+            Constraint::Length((frame.area().height / 3).clamp(5, 15)),
             Constraint::Min(10),
             Constraint::Length(3),
         ])
@@ -268,7 +268,7 @@ fn draw(frame: &mut Frame, dashboard: &Dashboard<'_>) {
     draw_position(frame, outer[1], dashboard);
     let middle = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Min(8)])
+        .constraints([Constraint::Length(3), Constraint::Min(4)])
         .split(outer[2]);
     draw_stitch(frame, middle[0], dashboard);
     let details = Layout::default()
@@ -376,12 +376,27 @@ fn draw_position(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
         count - 1,
         dashboard.analysis.tempo
     );
-    let block = panel("TRACK POSITION");
+    let block = panel("BEAT CONNECTIONS · TRACK POSITION");
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 {
         return;
     }
+    let map_height = inner.height.saturating_sub(2);
+    let next_jump = dashboard
+        .queue
+        .iter()
+        .skip(1)
+        .find_map(|item| item.step.jumped_from.map(|source| (source, item.step.beat)));
+    crate::connections::draw(
+        frame,
+        Rect::new(inner.x, inner.y, inner.width, map_height),
+        dashboard.graph,
+        count,
+        beat,
+        next_jump,
+    );
+    let gauge_y = inner.y + map_height;
     frame.render_widget(
         Gauge::default()
             .gauge_style(
@@ -392,12 +407,12 @@ fn draw_position(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
             )
             .ratio(ratio.clamp(0.0, 1.0))
             .label(label),
-        Rect::new(inner.x, inner.y, inner.width, 1),
+        Rect::new(inner.x, gauge_y, inner.width, 1),
     );
     if inner.height >= 2 {
         draw_coverage(
             frame,
-            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+            Rect::new(inner.x, gauge_y + 1, inner.width, 1),
             &dashboard.coverage,
         );
     }

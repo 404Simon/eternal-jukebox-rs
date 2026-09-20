@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { PlannedBeat, PreparedTrack, TransitionProbability } from '../types'
 import { beatLabel, formatSession, formatTime } from '../format'
 import { Brand } from './Brand'
+import { BeatConnections } from './BeatConnections'
 
 interface DashboardProps {
   choices: TransitionProbability[]
@@ -17,6 +18,7 @@ interface DashboardProps {
   volume: number
   onChangeTrack: () => void
   onSeek: (seconds: number) => void
+  onSeekToBeat: (beat: number) => void
   onToggle: () => void
   onVolume: (volume: number) => void
 }
@@ -29,7 +31,7 @@ export function Dashboard(props: DashboardProps) {
   const { choices, coverage, fileName, history, jumpCount, live, paused, queue, sessionSeconds, track, volume } = props
   const currentBeat = live?.beat ?? 0
   const currentTime = track.analysis.beats[currentBeat]?.start ?? 0
-  const progress = currentTime / track.analysis.duration * 100
+  const progress = currentBeat / Math.max(1, track.analysis.beats.length - 1) * 100
   const branchCount = track.graph.branches.reduce((sum, branches) => sum + branches.length, 0)
   const jumps = history.filter((step) => step.jumpedFrom !== null)
   const orderedChoices = [...choices].sort((left, right) => right.probability - left.probability).slice(0, 6)
@@ -48,8 +50,14 @@ export function Dashboard(props: DashboardProps) {
       <div className="session-time"><small>Session</small><strong>{formatSession(sessionSeconds)}</strong></div>
     </section>
 
-    <Panel title="Track position" meta={`${formatTime(currentTime)} / ${formatTime(track.analysis.duration)}`} className="position-card">
-      <div className="progress-track"><i style={{ width: `${progress}%` }} /><b style={{ left: `${progress}%` }} /></div>
+    <Panel title="Beat connections" meta={`${formatTime(currentTime)} / ${formatTime(track.analysis.duration)}`} className="position-card">
+      <BeatConnections graph={track.graph} count={track.analysis.beats.length} currentBeat={currentBeat} queue={queue} />
+      <div className="progress-track">
+        <i style={{ width: `${progress}%` }} /><b style={{ left: `${progress}%` }} />
+        <input className="track-seek" type="range" min="0" max={Math.max(0, track.analysis.beats.length - 1)} step="1"
+          value={currentBeat} aria-label="Track position" aria-valuetext={`${formatTime(currentTime)} of ${formatTime(track.analysis.duration)}`}
+          onChange={(event) => props.onSeekToBeat(event.target.valueAsNumber)} />
+      </div>
       <div className="coverage-strip" aria-label="Playback coverage">
         {coverageBins.map((intensity, index) => <i
           key={index}
