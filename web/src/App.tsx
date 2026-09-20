@@ -15,6 +15,7 @@ function App() {
   const [track, setTrack] = useState<PreparedTrack>()
   const [live, setLive] = useState<PlannedBeat>()
   const [history, setHistory] = useState<PlannedBeat[]>([])
+  const [jumpCount, setJumpCount] = useState(0)
   const [queue, setQueue] = useState<PlannedBeat[]>([])
   const [coverage, setCoverage] = useState<number[]>([])
   const [choices, setChoices] = useState<TransitionProbability[]>([])
@@ -44,6 +45,7 @@ function App() {
     setError('')
     setTrack(undefined)
     setHistory([])
+    setJumpCount(0)
     setQueue([])
     setCoverage([])
     setSessionSeconds(0)
@@ -75,6 +77,7 @@ function App() {
         (step) => {
           setLive(step)
           setHistory((items) => [step, ...items].slice(0, 256))
+          if (step.jumpedFrom !== null) setJumpCount((count) => count + 1)
           setCoverage((items) => {
             const updated = items.length === result.analysis.beats.length
               ? [...items]
@@ -147,13 +150,14 @@ function App() {
     planner.current = undefined
     setTrack(undefined)
     setLive(undefined)
+    setJumpCount(0)
     setPaused(false)
     setPhase('idle')
   }
 
   return <Dashboard
     choices={choices} coverage={coverage} fileName={fileName} history={history}
-    live={live} paused={paused} queue={queue} sessionSeconds={sessionSeconds}
+    jumpCount={jumpCount} live={live} paused={paused} queue={queue} sessionSeconds={sessionSeconds}
     track={track} volume={volume} onChangeTrack={changeTrack} onSeek={seek}
     onToggle={() => void toggle()} onVolume={changeVolume}
   />

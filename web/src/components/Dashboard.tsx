@@ -8,6 +8,7 @@ interface DashboardProps {
   coverage: number[]
   fileName: string
   history: PlannedBeat[]
+  jumpCount: number
   live?: PlannedBeat
   paused: boolean
   queue: PlannedBeat[]
@@ -25,7 +26,7 @@ function Panel({ title, meta, className = '', children }: { title: string; meta?
 }
 
 export function Dashboard(props: DashboardProps) {
-  const { choices, coverage, fileName, history, live, paused, queue, sessionSeconds, track, volume } = props
+  const { choices, coverage, fileName, history, jumpCount, live, paused, queue, sessionSeconds, track, volume } = props
   const currentBeat = live?.beat ?? 0
   const currentTime = track.analysis.beats[currentBeat]?.start ?? 0
   const progress = currentTime / track.analysis.duration * 100
@@ -84,6 +85,6 @@ export function Dashboard(props: DashboardProps) {
       </Panel>
     </div>
 
-    <footer className="shortcut-bar"><span><kbd>B</kbd> back</span><span><kbd>F</kbd> forward</span><span><kbd>P</kbd> pause</span><span><kbd>,</kbd><kbd>.</kbd> volume</span><strong><i /> {jumps.length} jumps this session</strong></footer>
+    <footer className="shortcut-bar"><span><kbd>B</kbd> back</span><span><kbd>F</kbd> forward</span><span><kbd>P</kbd> pause</span><span><kbd>,</kbd><kbd>.</kbd> volume</span><strong><i /> {jumpCount} jumps this session</strong></footer>
   </main>
 }
