@@ -8,6 +8,10 @@ use crate::Audio;
 
 const SILENCE_FLOOR_DB: f32 = -60.0;
 const SILENCE_BELOW_PEAK_DB: f32 = 40.0;
+const SPECTRAL_BAND_EDGES: [f32; 5] = [80.0, 200.0, 800.0, 2_000.0, 6_000.0];
+const SPECTRAL_BAND_COUNT: usize = SPECTRAL_BAND_EDGES.len() + 1;
+const ONSET_PROFILE_SIZE: usize = 4;
+const PERIOD_MULTIPLES: [usize; 5] = [1, 2, 4, 8, 16];
 
 #[derive(Clone, Debug)]
 pub struct AnalysisConfig {
@@ -53,8 +57,14 @@ pub struct Features {
     pub chroma: [f32; 12],
     /// Spectral centroid, bandwidth, rolloff and flatness, all normalised.
     pub timbre: [f32; 4],
+    /// Relative energy from sub-bass through high frequencies.
+    #[serde(default)]
+    pub spectral_bands: [f32; SPECTRAL_BAND_COUNT],
     pub loudness_db: f32,
     pub onset_strength: f32,
+    /// Transient energy over four equally sized parts of the beat.
+    #[serde(default)]
+    pub onset_profile: [f32; ONSET_PROFILE_SIZE],
 }
 
 #[derive(Debug, Error)]
@@ -71,6 +81,7 @@ pub enum AnalysisError {
 struct Frame {
     time: f64,
     chroma: [f32; 12],
+    spectral_bands: [f32; SPECTRAL_BAND_COUNT],
     spectral_energy: f32,
     weighted_frequency: f32,
     weighted_squared_frequency: f32,
@@ -97,8 +108,9 @@ pub fn analyse(audio: &Audio, config: &AnalysisConfig) -> Result<Analysis, Analy
 
     let frames = spectral_frames(audio, config)?;
     let onset = onset_envelope(&frames);
-    let period = estimate_period(&onset, audio.sample_rate, config);
-    let first = estimate_phase(&onset, period);
+    let coarse_period = estimate_period(&onset, audio.sample_rate, config);
+    let approximate_period = refine_period(&onset, coarse_period);
+    let (period, first) = refine_grid(&onset, approximate_period);
     let beat_frames = track_beat_positions(&onset, first, period);
     let beats = trim_silent_boundaries(describe_beats(&frames, &beat_frames, audio));
     let seconds_per_beat = period as f32 * config.hop_size as f32 / audio.sample_rate as f32;
@@ -164,6 +176,7 @@ fn spectral_frames(audio: &Audio, config: &AnalysisConfig) -> Result<Vec<Frame>,
         frames.push(Frame {
             time: (frame_index * config.hop_size) as f64 / f64::from(sample_rate),
             chroma: summary.chroma,
+            spectral_bands: summary.spectral_bands,
             spectral_energy: summary.spectral_energy,
             weighted_frequency: summary.weighted_frequency,
             weighted_squared_frequency: summary.weighted_squared_frequency,
@@ -193,6 +206,7 @@ fn summarise_spectrum(magnitudes: &[f32], sample_rate: u32, fft_size: usize) -> 
     let mut frame = Frame {
         time: 0.0,
         chroma: [0.0; 12],
+        spectral_bands: [0.0; SPECTRAL_BAND_COUNT],
         spectral_energy: magnitudes.iter().skip(1).sum(),
         weighted_frequency: 0.0,
         weighted_squared_frequency: 0.0,
@@ -209,6 +223,8 @@ fn summarise_spectrum(magnitudes: &[f32], sample_rate: u32, fft_size: usize) -> 
             let midi = 69.0 + 12.0 * (frequency / 440.0).log2();
             frame.chroma[(midi.round() as i32).rem_euclid(12) as usize] += magnitude;
         }
+        let band = spectral_band(frequency);
+        frame.spectral_bands[band] += magnitude;
         frame.weighted_frequency += frequency * magnitude;
         frame.weighted_squared_frequency += frequency * frequency * magnitude;
         frame.geometric_log_sum += (magnitude + 1.0e-12).ln();
@@ -217,7 +233,14 @@ fn summarise_spectrum(magnitudes: &[f32], sample_rate: u32, fft_size: usize) -> 
             frame.rolloff = frequency;
         }
     }
+    for energy in &mut frame.spectral_bands {
+        *energy /= frame.spectral_energy.max(1.0e-12);
+    }
     frame
+}
+
+fn spectral_band(frequency: f32) -> usize {
+    SPECTRAL_BAND_EDGES.partition_point(|edge| frequency >= *edge)
 }
 
 fn onset_envelope(frames: &[Frame]) -> Vec<f32> {
@@ -241,11 +264,37 @@ fn estimate_period(onset: &[f32], sample_rate: u32, config: &AnalysisConfig) -> 
     let frames_per_minute = 60.0 * sample_rate as f32 / config.hop_size as f32;
     let minimum_lag = (frames_per_minute / config.maximum_bpm).round() as usize;
     let maximum_lag = (frames_per_minute / config.minimum_bpm).round() as usize;
-    (minimum_lag..=maximum_lag.min(onset.len().saturating_sub(1)))
+    let selected = (minimum_lag..=maximum_lag.min(onset.len().saturating_sub(1)))
         .max_by(|&left, &right| {
             autocorrelation(onset, left).total_cmp(&autocorrelation(onset, right))
         })
-        .unwrap_or(minimum_lag.max(1))
+        .unwrap_or(minimum_lag.max(1));
+    prefer_supported_faster_pulse(onset, selected, minimum_lag)
+}
+
+fn prefer_supported_faster_pulse(onset: &[f32], mut period: usize, minimum_lag: usize) -> usize {
+    // Alternating strong and weak beats often make the two-beat period score
+    // slightly higher than the actual pulse. Prefer the faster octave when it
+    // retains most of the autocorrelation support instead of returning a
+    // half-tempo beat grid.
+    loop {
+        let half = period / 2;
+        if half < minimum_lag {
+            break;
+        }
+        let faster = half.saturating_sub(1)..=half.saturating_add(1);
+        let faster = faster
+            .filter(|lag| *lag >= minimum_lag && *lag < onset.len())
+            .max_by(|&left, &right| {
+                autocorrelation(onset, left).total_cmp(&autocorrelation(onset, right))
+            })
+            .unwrap_or(half);
+        if autocorrelation(onset, faster) < 0.8 * autocorrelation(onset, period) {
+            break;
+        }
+        period = faster;
+    }
+    period
 }
 
 fn autocorrelation(values: &[f32], lag: usize) -> f32 {
@@ -256,41 +305,99 @@ fn autocorrelation(values: &[f32], lag: usize) -> f32 {
         .sum()
 }
 
-fn estimate_phase(onset: &[f32], period: usize) -> usize {
-    (0..period.min(onset.len()))
+// Integer FFT-hop lags are too coarse for a grid spanning a whole track.
+// Repeated pulses at longer lags resolve the period between two FFT hops.
+fn refine_period(onset: &[f32], coarse: usize) -> f64 {
+    let correlations: Vec<_> = (0..onset.len().min((coarse + 2) * 16 + 1))
+        .map(|lag| autocorrelation(onset, lag) / (onset.len() - lag) as f32)
+        .collect();
+    (-100..=100)
+        .map(|offset| coarse as f64 + f64::from(offset) / 100.0)
+        .filter(|period| *period >= 1.0)
+        .max_by(|&left, &right| {
+            period_score(&correlations, left).total_cmp(&period_score(&correlations, right))
+        })
+        .unwrap_or(coarse as f64)
+}
+
+fn period_score(correlations: &[f32], period: f64) -> f32 {
+    PERIOD_MULTIPLES
+        .into_iter()
+        .filter_map(|multiple| {
+            let lag = period * multiple as f64;
+            let index = lag.floor() as usize;
+            correlations
+                .get(index)
+                .zip(correlations.get(index + 1))
+                .map(|(&left, &right)| left + (right - left) * (lag - index as f64) as f32)
+        })
+        .sum()
+}
+
+fn refine_grid(onset: &[f32], approximate_period: f64) -> (f64, usize) {
+    // Fit period and phase together over the whole track. Even a 0.1 BPM
+    // error can shift a later repeated phrase onto a different beat. Smoothing
+    // makes the fit tolerant of the frame quantisation of individual attacks.
+    let smoothed: Vec<_> = (0..onset.len())
+        .map(|index| {
+            0.5 * onset[index]
+                + 0.25 * index.checked_sub(1).map_or(0.0, |i| onset[i])
+                + 0.25 * onset.get(index + 1).copied().unwrap_or(0.0)
+        })
+        .collect();
+    (-100..=100)
+        .map(|offset| approximate_period + f64::from(offset) / 1000.0)
+        .filter(|period| *period >= 1.0)
+        .map(|period| {
+            let phase = estimate_phase(&smoothed, period);
+            (period, phase)
+        })
+        .max_by(|&(left_period, left_phase), &(right_period, right_phase)| {
+            phase_score(&smoothed, left_phase, left_period).total_cmp(&phase_score(
+                &smoothed,
+                right_phase,
+                right_period,
+            ))
+        })
+        .unwrap_or((approximate_period, 0))
+}
+
+fn estimate_phase(onset: &[f32], period: f64) -> usize {
+    (0..(period.ceil() as usize).min(onset.len()))
         .max_by(|&left, &right| {
             phase_score(onset, left, period).total_cmp(&phase_score(onset, right, period))
         })
         .unwrap_or(0)
 }
 
-fn phase_score(onset: &[f32], phase: usize, period: usize) -> f32 {
-    (phase..onset.len())
-        .step_by(period)
+fn phase_score(onset: &[f32], phase: usize, period: f64) -> f32 {
+    (0..onset.len())
+        .map(|beat| (phase as f64 + beat as f64 * period).round() as usize)
+        .take_while(|&index| index < onset.len())
         .map(|index| onset[index])
         .sum()
 }
 
-fn track_beat_positions(onset: &[f32], first: usize, period: usize) -> Vec<usize> {
-    let period = period.max(1);
-    let search_radius = (period / 8).max(1);
+fn track_beat_positions(onset: &[f32], first: usize, period: f64) -> Vec<usize> {
+    let period = period.max(1.0);
+    let search_radius = (period as usize / 8).max(1);
     let mut positions = Vec::new();
-    let mut current = strongest_near(onset, first, search_radius);
-
-    while current < onset.len() {
-        positions.push(current);
-        let predicted = current.saturating_add(period);
+    for beat in 0..onset.len() {
+        // Snap each attack independently. Feeding the last snapped onset back
+        // into the next prediction accumulates timing errors in breakdowns
+        // and can permanently change the beat's position within the bar.
+        let predicted = (first as f64 + beat as f64 * period).round() as usize;
         if predicted >= onset.len() {
             break;
         }
-        current = strongest_near(onset, predicted, search_radius);
-        if current <= *positions.last().expect("a position was just pushed") {
-            current = predicted;
+        let current = strongest_near(onset, predicted, search_radius);
+        if positions.last().is_none_or(|last| current > *last) {
+            positions.push(current);
         }
     }
     if positions
         .first()
-        .is_some_and(|position| *position > period / 2)
+        .is_some_and(|position| *position as f64 > period / 2.0)
     {
         positions.insert(0, 0);
     }
@@ -369,6 +476,7 @@ fn trim_silent_boundaries(mut beats: Vec<Beat>) -> Vec<Beat> {
 
 fn aggregate_features(frames: &[Frame], sample_rate: u32) -> Features {
     let mut chroma = [0.0; 12];
+    let mut spectral_bands = [0.0; SPECTRAL_BAND_COUNT];
     let mut weighted_frequency = 0.0;
     let mut spectral_energy = 0.0;
     let mut squared_deviation = 0.0;
@@ -379,6 +487,9 @@ fn aggregate_features(frames: &[Frame], sample_rate: u32) -> Features {
 
     for frame in frames {
         for (total, value) in chroma.iter_mut().zip(frame.chroma) {
+            *total += value;
+        }
+        for (total, value) in spectral_bands.iter_mut().zip(frame.spectral_bands) {
             *total += value;
         }
         weighted_frequency += frame.weighted_frequency;
@@ -399,9 +510,22 @@ fn aggregate_features(frames: &[Frame], sample_rate: u32) -> Features {
     for value in &mut chroma {
         *value /= chroma_sum;
     }
+    for value in &mut spectral_bands {
+        *value /= frames.len() as f32;
+    }
 
     let average_rms = frames.iter().map(|frame| frame.rms).sum::<f32>() / frames.len() as f32;
     let onset_strength = frames.iter().map(|frame| frame.flux).sum::<f32>() / frames.len() as f32;
+    let mut onset_profile = [0.0; ONSET_PROFILE_SIZE];
+    let mut onset_counts = [0_usize; ONSET_PROFILE_SIZE];
+    for (index, frame) in frames.iter().enumerate() {
+        let section = (index * onset_profile.len() / frames.len()).min(onset_profile.len() - 1);
+        onset_profile[section] += frame.flux;
+        onset_counts[section] += 1;
+    }
+    for (value, count) in onset_profile.iter_mut().zip(onset_counts) {
+        *value /= count.max(1) as f32;
+    }
     Features {
         chroma,
         timbre: [
@@ -410,8 +534,10 @@ fn aggregate_features(frames: &[Frame], sample_rate: u32) -> Features {
             rolloff_sum / frames.len() as f32 / nyquist,
             flatness,
         ],
+        spectral_bands,
         loudness_db: 20.0 * average_rms.max(1.0e-9).log10(),
         onset_strength,
+        onset_profile,
     }
 }
 
@@ -426,7 +552,26 @@ mod tests {
             values[index] = 1.0;
         }
         assert!(autocorrelation(&values, 10) > autocorrelation(&values, 9));
-        assert_eq!(estimate_phase(&values, 10), 3);
+        assert_eq!(estimate_phase(&values, 10.0), 3);
+    }
+
+    #[test]
+    fn tempo_prefers_supported_weak_intermediate_beats() {
+        let mut values = vec![0.0; 100];
+        for (pulse, index) in (0..100).step_by(10).enumerate() {
+            values[index] = if pulse % 2 == 0 { 1.0 } else { 0.8 };
+        }
+
+        assert_eq!(prefer_supported_faster_pulse(&values, 20, 5), 10);
+    }
+
+    #[test]
+    fn frequencies_are_assigned_to_stable_perceptual_bands() {
+        assert_eq!(spectral_band(40.0), 0);
+        assert_eq!(spectral_band(80.0), 1);
+        assert_eq!(spectral_band(199.0), 1);
+        assert_eq!(spectral_band(200.0), 2);
+        assert_eq!(spectral_band(12_000.0), SPECTRAL_BAND_COUNT - 1);
     }
 
     #[test]
@@ -436,9 +581,51 @@ mod tests {
             onset[position] = 1.0;
         }
         assert_eq!(
-            track_beat_positions(&onset, 3, 10),
+            track_beat_positions(&onset, 3, 10.5),
             vec![3, 14, 24, 35, 45, 56, 66]
         );
+    }
+
+    #[test]
+    fn fractional_tempo_fit_preserves_distant_repeated_beats() {
+        let period = 29.531;
+        let phase: usize = 3;
+        let beat_count = 600;
+        let mut onset = vec![0.0; (period * beat_count as f64).ceil() as usize];
+        for beat in 0..beat_count {
+            if (140..220).contains(&beat) {
+                continue; // A breakdown must not change the subsequent bar phase.
+            }
+            let position = (phase as f64 + beat as f64 * period).round() as usize;
+            if let Some(value) = onset.get_mut(position) {
+                *value = if beat % 2 == 0 { 1.0 } else { 0.8 };
+            }
+        }
+
+        let (fitted_period, first) = refine_grid(&onset, refine_period(&onset, 30));
+        assert!((fitted_period - period).abs() < 0.005);
+        let positions = track_beat_positions(&onset, first, fitted_period);
+        assert_eq!(positions.len(), beat_count);
+        for beat in [20, 276, 532] {
+            let expected = (phase as f64 + beat as f64 * period).round() as usize;
+            assert!(positions[beat].abs_diff(expected) <= 1);
+        }
+    }
+
+    #[test]
+    fn transient_offsets_do_not_accumulate_across_a_breakdown() {
+        let mut onset = vec![0.0; 6_000];
+        for beat in 0..200 {
+            let position = 3 + beat * 30;
+            if beat < 50 {
+                onset[position + 2] = 1.0;
+            } else if beat >= 150 {
+                onset[position] = 1.0;
+            }
+        }
+        let positions = track_beat_positions(&onset, 3, 30.0);
+        assert_eq!(positions.len(), 200);
+        assert_eq!(positions[175], 3 + 175 * 30);
     }
 
     #[test]

@@ -151,9 +151,11 @@ fn range(values: impl Iterator<Item = f32>) -> f32 {
 fn feature_distance(left: &Features, right: &Features, norm: &Normalisation) -> f32 {
     let chroma = euclidean(&left.chroma, &right.chroma);
     let timbre = euclidean(&left.timbre, &right.timbre);
+    let spectral_bands = euclidean(&left.spectral_bands, &right.spectral_bands);
     let loudness = (left.loudness_db - right.loudness_db).abs() / norm.loudness;
     let onset = (left.onset_strength - right.onset_strength).abs() / norm.onset;
-    10.0 * chroma + 4.0 * timbre + 2.0 * loudness + onset
+    let onset_profile = euclidean(&left.onset_profile, &right.onset_profile) / norm.onset;
+    10.0 * chroma + 4.0 * timbre + 3.0 * spectral_bands + 2.0 * loudness + onset + onset_profile
 }
 
 fn transition_distance(
