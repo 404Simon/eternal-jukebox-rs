@@ -62,10 +62,16 @@ Every sequential beat raises it by 1.8 percentage points, up to a maximum of
 This produces stretches of ordinary playback while making a jump progressively
 more likely when no jump has happened recently.
 
-At the graph's final safe branch point, the base branch probability is 70%.
-This favours continuing through a musical loop while leaving 30% for the
-sequential path into the outro. Novelty and recent-coverage weights modify both
-values, so the outro becomes more competitive after a loop has been repeated.
+At the last source with a backward edge within the normal similarity threshold,
+the planner must take a qualified backward edge. Coverage weights choose among
+these exits but cannot select the outro or an edge accepted only by the graph's
+relaxed fallback. Forward jumps cannot land on or beyond this source, since
+landing on it would skip its decision (the source is the next beat to play).
+
+This leaves the unmatched tail after the final exit out of automatic playback.
+If no qualified backward edge exists, or playback is manually repositioned
+beyond that exit, sequential playback and the end-of-file restart remain the
+fallback. No new transition is invented to enforce looping.
 
 ## Novelty weights
 

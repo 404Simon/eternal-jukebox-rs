@@ -3,9 +3,6 @@ use serde::Serialize;
 
 use crate::BranchGraph;
 
-// Reaching the final safe branch should favour another musical loop without
-// making the outro so rare that one region dominates the session.
-const FINAL_BRANCH_PROBABILITY: f32 = 0.70;
 // Compare destinations over roughly five percent of the track. This catches a
 // repeated verse/chorus-sized region rather than only the exact landing beat.
 const COVERAGE_WINDOW_DIVISOR: usize = 20;
@@ -30,6 +27,7 @@ pub struct TransitionProbability {
 /// Stateful infinite walk over a beat graph.
 pub struct PlaybackPlanner {
     graph: BranchGraph,
+    loop_exit: Option<usize>,
     current: Option<usize>,
     branch_chance: f32,
     minimum_branch_chance: f32,
@@ -49,6 +47,19 @@ impl PlaybackPlanner {
 
     #[must_use]
     pub fn with_seed(graph: BranchGraph, seed: u64) -> Self {
+        // Only an ordinary, quality-qualified backward edge may become
+        // mandatory. A relaxed graph fallback must never force a bad splice.
+        let loop_exit = graph
+            .branches
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(source, branches)| {
+                branches
+                    .iter()
+                    .any(|branch| branch.destination < source && branch.distance <= graph.threshold)
+                    .then_some(source)
+            });
         let sequential_uses = vec![0; graph.branches.len()];
         let branch_uses = graph
             .branches
@@ -58,6 +69,7 @@ impl PlaybackPlanner {
         let beat_heat = vec![0.0; graph.branches.len()];
         Self {
             graph,
+            loop_exit,
             current: None,
             branch_chance: 0.18,
             minimum_branch_chance: 0.18,
@@ -114,40 +126,27 @@ impl PlaybackPlanner {
                 is_sequential: true,
             }];
         }
-        let force_branch = source == self.graph.last_branch_point;
         let next_branch_chance =
             (self.branch_chance + self.branch_chance_delta).min(self.maximum_branch_chance);
-        let branch_probability = if force_branch {
-            FINAL_BRANCH_PROBABILITY
-        } else {
-            next_branch_chance
-        };
+        let (sequential_weight, branch_weights) =
+            self.transition_weights(source, next_branch_chance);
         let mut choices = Vec::with_capacity(branches.len() + 1);
         choices.push(TransitionProbability {
             source,
             destination: source,
-            probability: (1.0 - branch_probability)
-                * novelty(self.sequential_uses[source])
-                * self.coverage_novelty(source),
+            probability: sequential_weight,
             distance: None,
             is_sequential: true,
         });
-        let branch_base = branch_probability / branches.len() as f32;
-        choices.extend(
-            branches
-                .iter()
-                .enumerate()
-                .map(|(index, branch)| TransitionProbability {
-                    source,
-                    destination: branch.destination,
-                    probability: branch_base
-                        * novelty(self.branch_uses[source][index])
-                        * self.coverage_novelty(branch.destination)
-                        * self.loop_closure_novelty(source, branch.destination),
-                    distance: Some(branch.distance),
-                    is_sequential: false,
-                }),
-        );
+        choices.extend(branches.iter().zip(branch_weights).map(|(branch, weight)| {
+            TransitionProbability {
+                source,
+                destination: branch.destination,
+                probability: weight,
+                distance: Some(branch.distance),
+                is_sequential: false,
+            }
+        }));
         let total = choices.iter().map(|choice| choice.probability).sum::<f32>();
         for choice in &mut choices {
             choice.probability /= total;
@@ -171,10 +170,9 @@ impl PlaybackPlanner {
             });
         }
         let source = sequential.min(self.graph.branches.len() - 1);
-        let force_branch = source == self.graph.last_branch_point;
         self.branch_chance =
             (self.branch_chance + self.branch_chance_delta).min(self.maximum_branch_chance);
-        let selected = self.select_transition(source, force_branch);
+        let selected = self.select_transition(source);
         let (beat, jumped_from) = if let Some(branch_index) = selected {
             self.branch_uses[source][branch_index] += 1;
             self.branch_chance = self.minimum_branch_chance;
@@ -189,33 +187,40 @@ impl PlaybackPlanner {
         Some(Step { beat, jumped_from })
     }
 
-    /// Choose between normal continuation and all outgoing branches. Repeated
-    /// transitions and frequently visited destinations lose weight but never
-    /// become impossible, similar to a reinforced random walk in reverse.
-    fn select_transition(&mut self, source: usize, force_branch: bool) -> Option<usize> {
-        let branch_count = self.graph.branches[source].len();
-        if branch_count == 0 {
-            return None;
-        }
-        let branch_probability = if force_branch {
-            FINAL_BRANCH_PROBABILITY
-        } else {
-            self.branch_chance
-        };
+    /// Shared by playback and its probability preview. Coverage can rank safe
+    /// exits, but cannot outweigh the last opportunity to stay in the song.
+    fn transition_weights(&self, source: usize, branch_chance: f32) -> (f32, Vec<f32>) {
+        let force_branch = self.loop_exit == Some(source);
+        let branch_probability = if force_branch { 1.0 } else { branch_chance };
         let sequential_weight = (1.0 - branch_probability)
             * novelty(self.sequential_uses[source])
             * self.coverage_novelty(source);
-        let branch_base = branch_probability / branch_count as f32;
+        let branch_base = branch_probability / self.graph.branches[source].len().max(1) as f32;
         let branch_weights: Vec<_> = self.graph.branches[source]
             .iter()
             .enumerate()
             .map(|(index, branch)| {
+                let skips_exit = self
+                    .loop_exit
+                    .is_some_and(|exit| source <= exit && branch.destination >= exit);
+                if skips_exit || (force_branch && branch.distance > self.graph.threshold) {
+                    return 0.0;
+                }
                 branch_base
                     * novelty(self.branch_uses[source][index])
                     * self.coverage_novelty(branch.destination)
                     * self.loop_closure_novelty(source, branch.destination)
             })
             .collect();
+        (sequential_weight, branch_weights)
+    }
+
+    fn select_transition(&mut self, source: usize) -> Option<usize> {
+        if self.graph.branches[source].is_empty() {
+            return None;
+        }
+        let (sequential_weight, branch_weights) =
+            self.transition_weights(source, self.branch_chance);
         let total = sequential_weight + branch_weights.iter().sum::<f32>();
         let mut draw = self.rng.random_range(0.0..total);
         if draw < sequential_weight {
@@ -232,7 +237,7 @@ impl PlaybackPlanner {
                     false
                 }
             })
-            .or(Some(branch_count - 1))
+            .or_else(|| branch_weights.iter().rposition(|weight| *weight > 0.0))
     }
 
     /// Exponentially suppress destinations inside an overplayed section. The
@@ -259,7 +264,9 @@ impl PlaybackPlanner {
         }
         let interval = &self.beat_heat[destination..=source];
         let mean_heat = interval.iter().sum::<f32>() / interval.len() as f32;
-        (-LOOP_CLOSURE_STRENGTH * (mean_heat - 1.0).max(0.0)).exp()
+        (-LOOP_CLOSURE_STRENGTH * (mean_heat - 1.0).max(0.0))
+            .max(-20.0)
+            .exp()
     }
 
     fn record_visit(&mut self, beat: usize) {
@@ -369,25 +376,110 @@ mod tests {
     }
 
     #[test]
-    fn fresh_final_branch_is_favoured_over_the_outro() {
+    fn final_exit_rejects_forward_and_relaxed_edges_even_when_overplayed() {
         let graph = BranchGraph {
             branches: vec![
+                vec![],
+                vec![
+                    Branch {
+                        destination: 0,
+                        distance: 0.1,
+                    },
+                    Branch {
+                        destination: 2,
+                        distance: 0.05,
+                    },
+                    Branch {
+                        destination: 0,
+                        distance: 0.3,
+                    },
+                ],
+                vec![],
+            ],
+            threshold: 0.2,
+            last_branch_point: 1,
+        };
+        let mut planner = PlaybackPlanner::with_seed(graph, 42);
+        planner.beat_heat.fill(1_000.0);
+        planner.branch_uses[1][0] = 1_000_000;
+        assert!(planner.continue_from(0));
+        let probabilities = planner.next_probabilities();
+        assert!((probabilities[1].probability - 1.0).abs() < f32::EPSILON);
+        for index in [0, 2, 3] {
+            assert!(probabilities[index].probability.abs() < f32::EPSILON);
+        }
+        assert_eq!(
+            planner.next_step(),
+            Some(Step {
+                beat: 0,
+                jumped_from: Some(1)
+            })
+        );
+    }
+
+    #[test]
+    fn forward_jumps_cannot_skip_the_last_safe_exit() {
+        let graph = BranchGraph {
+            branches: vec![
+                vec![
+                    Branch {
+                        destination: 2,
+                        distance: 0.1,
+                    },
+                    Branch {
+                        destination: 3,
+                        distance: 0.1,
+                    },
+                ],
+                vec![],
                 vec![Branch {
-                    destination: 1,
-                    distance: 0.0,
+                    destination: 0,
+                    distance: 0.1,
                 }],
                 vec![],
             ],
-            threshold: 0.0,
-            last_branch_point: 0,
+            threshold: 0.2,
+            last_branch_point: 2,
         };
-        let probabilities = PlaybackPlanner::with_seed(graph, 42).next_probabilities();
-        let branch = probabilities
-            .iter()
-            .find(|choice| !choice.is_sequential)
-            .expect("the graph has one branch");
+        for seed in 0..16 {
+            let mut planner = PlaybackPlanner::with_seed(graph.clone(), seed);
+            for _ in 0..1_000 {
+                let probabilities = planner.next_probabilities();
+                let step = planner.next_step().unwrap();
+                assert!(step.beat < 2);
+                assert!(probabilities.iter().any(|choice| {
+                    choice.destination == step.beat
+                        && choice.is_sequential == step.jumped_from.is_none()
+                        && choice.probability > 0.0
+                }));
+            }
+        }
+    }
 
-        assert!((branch.probability - 0.7).abs() < f32::EPSILON);
+    #[test]
+    fn missing_quality_qualified_exit_keeps_sequential_fallback() {
+        for branches in [
+            vec![vec![]; 3],
+            vec![
+                vec![],
+                vec![Branch {
+                    destination: 0,
+                    distance: 0.3,
+                }],
+                vec![],
+            ],
+        ] {
+            let graph = BranchGraph {
+                branches,
+                threshold: 0.2,
+                last_branch_point: 1,
+            };
+            let mut planner = PlaybackPlanner::with_seed(graph, 42);
+            assert_eq!(planner.loop_exit, None);
+            assert!(planner.continue_from(0));
+            assert!(planner.next_probabilities()[0].probability > 0.0);
+            assert!(planner.take(1_000).any(|step| step.beat == 2));
+        }
     }
 
     #[test]
@@ -439,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn forced_loop_eventually_plays_the_outro() {
+    fn qualified_final_exit_prevents_the_outro() {
         let graph = BranchGraph {
             branches: vec![
                 vec![],
@@ -456,6 +548,6 @@ mod tests {
             .take(100)
             .map(|step| step.beat)
             .collect();
-        assert!(beats.contains(&2));
+        assert!(!beats.contains(&2));
     }
 }
