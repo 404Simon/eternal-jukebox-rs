@@ -68,11 +68,51 @@ struct QueuedBeat {
     probability: f32,
 }
 
+struct SessionClock {
+    started: Instant,
+    paused_at: Option<Instant>,
+    paused_for: Duration,
+}
+
+impl SessionClock {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            paused_at: None,
+            paused_for: Duration::ZERO,
+        }
+    }
+
+    fn pause(&mut self) {
+        if self.paused_at.is_none() {
+            self.paused_at = Some(Instant::now());
+        }
+    }
+
+    fn resume(&mut self) {
+        if let Some(paused_at) = self.paused_at.take() {
+            self.paused_for += paused_at.elapsed();
+        }
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.elapsed_at(Instant::now())
+    }
+
+    fn elapsed_at(&self, now: Instant) -> Duration {
+        let current_pause = self
+            .paused_at
+            .map_or(Duration::ZERO, |paused_at| now.duration_since(paused_at));
+        now.duration_since(self.started)
+            .saturating_sub(self.paused_for + current_pause)
+    }
+}
+
 struct Dashboard<'a> {
     analysis: &'a Analysis,
     graph: &'a BranchGraph,
     title: String,
-    started: Instant,
+    session_clock: SessionClock,
     live: Option<QueuedBeat>,
     queue: VecDeque<QueuedBeat>,
     history: VecDeque<QueuedBeat>,
@@ -93,7 +133,7 @@ impl<'a> Dashboard<'a> {
                 .unwrap_or(input.as_os_str())
                 .to_string_lossy()
                 .into_owned(),
-            started: Instant::now(),
+            session_clock: SessionClock::new(),
             live: None,
             queue: VecDeque::new(),
             history: VecDeque::new(),
@@ -178,8 +218,10 @@ pub fn play(
             if key.code == KeyCode::Char('p') {
                 dashboard.paused = !dashboard.paused;
                 if dashboard.paused {
+                    dashboard.session_clock.pause();
                     player.pause();
                 } else {
+                    dashboard.session_clock.resume();
                     player.play();
                 }
             }
@@ -622,7 +664,7 @@ fn draw_choices(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
-    let elapsed = dashboard.started.elapsed().as_secs();
+    let elapsed = dashboard.session_clock.elapsed().as_secs();
     let text = Line::from(vec![
         Span::styled(
             format!(
@@ -654,5 +696,40 @@ fn jump_direction(source: usize, destination: usize) -> &'static str {
         "backward"
     } else {
         "forward"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_clock_does_not_advance_while_paused() {
+        let started = Instant::now();
+        let clock = SessionClock {
+            started,
+            paused_at: Some(started + Duration::from_secs(5)),
+            paused_for: Duration::ZERO,
+        };
+
+        assert_eq!(
+            clock.elapsed_at(started + Duration::from_secs(20)),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn session_clock_excludes_completed_pauses() {
+        let started = Instant::now();
+        let clock = SessionClock {
+            started,
+            paused_at: None,
+            paused_for: Duration::from_secs(7),
+        };
+
+        assert_eq!(
+            clock.elapsed_at(started + Duration::from_secs(20)),
+            Duration::from_secs(13)
+        );
     }
 }
