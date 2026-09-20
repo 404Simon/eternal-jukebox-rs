@@ -6,7 +6,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use eternal_core::{
     Analysis, AnalysisConfig, BranchConfig, BranchGraph, PlaybackPlanner, analyse, decode,
@@ -16,6 +16,9 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_SEED: u64 = 1_474_317_007;
 const DEFAULT_STEPS: usize = 20_000;
 const DEFAULT_RUNS: usize = 4;
+// Bump when feature extraction or beat tracking changes; old JSON can still
+// deserialize successfully while containing an obsolete beat grid.
+const ANALYSIS_CACHE_VERSION: u32 = 2;
 
 #[derive(Debug, Parser)]
 #[command(about = "Deterministically simulate Eternal Jukebox playback")]
@@ -50,6 +53,9 @@ struct Cli {
     /// Override the graph's adaptive distance threshold.
     #[arg(long)]
     threshold: Option<f32>,
+    /// Fail if any run exceeds this number of physical end-of-file restarts.
+    #[arg(long)]
+    max_wraps: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -92,6 +98,14 @@ fn main() -> Result<()> {
             let seed = cli.seed.wrapping_add(offset as u64);
             let simulation = simulate(&graph, seed, cli.steps);
             print_simulation(seed, &simulation);
+            if let Some(limit) = cli.max_wraps {
+                ensure!(
+                    simulation.wraps <= limit,
+                    "{}: seed {seed} reached the end {} times (limit {limit})",
+                    input.display(),
+                    simulation.wraps
+                );
+            }
         }
     }
     Ok(())
@@ -126,6 +140,7 @@ fn cache_path(input: &Path) -> Result<PathBuf> {
         .unwrap_or_default()
         .as_secs();
     let mut hasher = DefaultHasher::new();
+    ANALYSIS_CACHE_VERSION.hash(&mut hasher);
     input.canonicalize()?.hash(&mut hasher);
     metadata.len().hash(&mut hasher);
     modified.hash(&mut hasher);
@@ -243,13 +258,16 @@ fn simulate(graph: &BranchGraph, seed: u64, steps: usize) -> Simulation {
     let mut longest_local_run = 0;
     let locality = (graph.branches.len() / 12).max(8);
     let mut recent = Vec::with_capacity(64);
+    let mut previous_beat = None;
     for _ in 0..steps {
         let Some(step) = planner.next_step() else {
             break;
         };
         visits[step.beat] = visits[step.beat].saturating_add(1);
         if let Some(source) = step.jumped_from {
-            let is_wrap = source + 1 >= graph.branches.len() && step.beat == 0;
+            // A branch *replacing* the final beat with beat zero is a valid
+            // jump, not a restart after actually playing the physical end.
+            let is_wrap = previous_beat == graph.branches.len().checked_sub(1) && step.beat == 0;
             if is_wrap {
                 wraps += 1;
             } else {
@@ -260,6 +278,7 @@ fn simulate(graph: &BranchGraph, seed: u64, steps: usize) -> Simulation {
                 }
             }
         }
+        previous_beat = Some(step.beat);
         recent.push(step.beat);
         if recent.len() > 64 {
             recent.remove(0);
@@ -318,7 +337,7 @@ fn print_simulation(seed: u64, simulation: &Simulation) {
         .min(simulation.visits.len());
     let (hot_start, hot_visits) = simulation
         .visits
-        .windows(window)
+        .windows(window.max(1))
         .enumerate()
         .map(|(start, values)| (start, values.iter().sum::<u32>()))
         .max_by_key(|item| item.1)
@@ -335,4 +354,42 @@ fn print_simulation(seed: u64, simulation: &Simulation) {
         simulation.wraps,
         simulation.longest_local_run,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eternal_core::Branch;
+
+    #[test]
+    fn final_beat_replacement_is_not_counted_as_a_restart() {
+        let graph = BranchGraph {
+            branches: vec![
+                vec![],
+                vec![],
+                vec![Branch {
+                    destination: 0,
+                    distance: 0.1,
+                }],
+            ],
+            threshold: 0.2,
+            last_branch_point: 2,
+        };
+        let simulation = simulate(&graph, DEFAULT_SEED, 100);
+        assert_eq!(simulation.wraps, 0);
+        assert!(simulation.jumps > 0);
+        assert_eq!(simulation.visits[2], 0);
+    }
+
+    #[test]
+    fn missing_exits_are_counted_as_physical_restarts() {
+        let graph = BranchGraph {
+            branches: vec![vec![]; 3],
+            threshold: 0.0,
+            last_branch_point: 0,
+        };
+        let simulation = simulate(&graph, DEFAULT_SEED, 10);
+        assert_eq!(simulation.wraps, 3);
+        assert_eq!(simulation.jumps, 0);
+    }
 }
