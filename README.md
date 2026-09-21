@@ -45,12 +45,18 @@ compiler when building. `ffmpeg` is not needed at runtime.
 
 ```text
 eternal <FILE> [--threshold <DISTANCE>] [--seed <NUMBER>]
+eternal play | pause | toggle | status
 ```
 
 `eternal` decodes and analyses the entire file, then continuously queues individual
 beats. It usually plays the next beat, occasionally selects a similar beat, and
 strongly prefers a backward transition before reaching the end. `--seed` makes
 those choices reproducible. A lower `--threshold` permits fewer, closer matches.
+
+Control a running TUI from another terminal with `eternal play`, `pause`,
+`toggle`, or `status`. On Linux, MPRIS also enables desktop media controls and
+commands such as `playerctl --player=eternal play-pause`. External controls require
+the same session D-Bus; local playback works without it.
 
 ## Architecture
 
@@ -87,6 +93,8 @@ coverage and loop behaviour without playing audio.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+# MPRIS integration test (requires dbus-run-session and playerctl)
+dbus-run-session -- cargo test -p eternal-tui mpris_round_trip -- --ignored
 ```
 
 ### Browser app

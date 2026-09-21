@@ -18,7 +18,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install --yes libasound2-dev cmake
+        run: sudo apt-get update && sudo apt-get install --yes libasound2-dev cmake dbus playerctl
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -33,6 +33,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Test MPRIS on a private session bus
+        run: dbus-run-session -- cargo test -p eternal-tui mpris_round_trip -- --ignored
 
   web:
     name: Web

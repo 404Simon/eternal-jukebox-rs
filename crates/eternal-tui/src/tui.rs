@@ -3,7 +3,7 @@ use std::{
     io::{self, Stdout},
     num::NonZero,
     path::Path,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -13,6 +13,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use eternal_core::{Analysis, Audio, BranchGraph, PlaybackPlanner, Step, TransitionProbability};
+use mpris_server::PlaybackStatus;
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
@@ -24,11 +25,12 @@ use ratatui::{
 use rodio::{DeviceSinkBuilder, Player};
 
 use crate::audio_source::BeatSource;
+use crate::mpris::Service;
+use crate::playback::{Command, MAX_VOLUME, Playback};
 
 const QUEUED_BEATS: usize = 8;
 const HISTORY_LENGTH: usize = 256;
 const VOLUME_STEP: f32 = 0.05;
-const MAX_VOLUME: f32 = 2.0;
 const SEEK_SECONDS: f64 = 10.0;
 
 const INK: Color = Color::Rgb(205, 214, 244);
@@ -68,59 +70,18 @@ struct QueuedBeat {
     probability: f32,
 }
 
-struct SessionClock {
-    started: Instant,
-    paused_at: Option<Instant>,
-    paused_for: Duration,
-}
-
-impl SessionClock {
-    fn new() -> Self {
-        Self {
-            started: Instant::now(),
-            paused_at: None,
-            paused_for: Duration::ZERO,
-        }
-    }
-
-    fn pause(&mut self) {
-        if self.paused_at.is_none() {
-            self.paused_at = Some(Instant::now());
-        }
-    }
-
-    fn resume(&mut self) {
-        if let Some(paused_at) = self.paused_at.take() {
-            self.paused_for += paused_at.elapsed();
-        }
-    }
-
-    fn elapsed(&self) -> Duration {
-        self.elapsed_at(Instant::now())
-    }
-
-    fn elapsed_at(&self, now: Instant) -> Duration {
-        let current_pause = self
-            .paused_at
-            .map_or(Duration::ZERO, |paused_at| now.duration_since(paused_at));
-        now.duration_since(self.started)
-            .saturating_sub(self.paused_for + current_pause)
-    }
-}
-
 struct Dashboard<'a> {
     analysis: &'a Analysis,
     graph: &'a BranchGraph,
     title: String,
-    session_clock: SessionClock,
+    playback: Playback,
     live: Option<QueuedBeat>,
     queue: VecDeque<QueuedBeat>,
     history: VecDeque<QueuedBeat>,
     choices: Vec<TransitionProbability>,
     coverage: Vec<u32>,
     jump_count: u64,
-    paused: bool,
-    volume: f32,
+    controls_disconnected: bool,
 }
 
 impl<'a> Dashboard<'a> {
@@ -133,15 +94,14 @@ impl<'a> Dashboard<'a> {
                 .unwrap_or(input.as_os_str())
                 .to_string_lossy()
                 .into_owned(),
-            session_clock: SessionClock::new(),
+            playback: Playback::new(volume),
             live: None,
             queue: VecDeque::new(),
             history: VecDeque::new(),
             choices: Vec::new(),
             coverage: vec![0; analysis.beats.len()],
             jump_count: 0,
-            paused: false,
-            volume,
+            controls_disconnected: false,
         }
     }
 
@@ -156,6 +116,23 @@ impl<'a> Dashboard<'a> {
         self.history.truncate(HISTORY_LENGTH);
         self.live = self.queue.front().cloned().or(Some(finished));
     }
+
+    fn publish(&mut self, remote: &mut Option<Service>) {
+        if let Some(service) = remote.as_ref()
+            && service
+                .publish(
+                    self.playback.status,
+                    self.playback.volume,
+                    self.playback.elapsed(),
+                )
+                .is_err()
+        {
+            // Losing desktop integration must not stop the music. Dropping the
+            // service also closes pending requests and releases its bus name.
+            *remote = None;
+            self.controls_disconnected = true;
+        }
+    }
 }
 
 pub fn play(
@@ -164,6 +141,7 @@ pub fn play(
     graph: &BranchGraph,
     seed: Option<u64>,
     input: &Path,
+    mut remote: Option<Service>,
 ) -> Result<()> {
     let mut output = DeviceSinkBuilder::open_default_sink()
         .context("could not open the default audio output device")?;
@@ -178,8 +156,20 @@ pub fn play(
     let mut pending = plan_next(&mut planner)?;
     let mut dashboard = Dashboard::new(analysis, graph, input, player.volume());
     let mut terminal = TerminalGuard::new()?;
+    dashboard.publish(&mut remote);
 
     loop {
+        // Bound work per frame, even if a client keeps sending commands.
+        for _ in 0..16 {
+            let Some(request) = remote.as_ref().and_then(Service::next_request) else {
+                break;
+            };
+            if dashboard.playback.apply(request.command, &player) {
+                pending = restart_at(0, &mut planner, &player, &mut dashboard);
+            }
+            dashboard.publish(&mut remote);
+            request.complete();
+        }
         while player.len() < QUEUED_BEATS {
             let next = plan_next(&mut planner)?;
             let beat = &analysis.beats[pending.step.beat];
@@ -204,6 +194,7 @@ pub fn play(
             dashboard.live = dashboard.queue.front().cloned();
         }
         dashboard.choices = planner.next_probabilities();
+        dashboard.publish(&mut remote);
         terminal.terminal.draw(|frame| draw(frame, &dashboard))?;
 
         if event::poll(Duration::from_millis(50))?
@@ -216,14 +207,7 @@ pub fn play(
                 return Ok(());
             }
             if key.code == KeyCode::Char('p') {
-                dashboard.paused = !dashboard.paused;
-                if dashboard.paused {
-                    dashboard.session_clock.pause();
-                    player.pause();
-                } else {
-                    dashboard.session_clock.resume();
-                    player.play();
-                }
+                dashboard.playback.apply(Command::Toggle, &player);
             }
             if matches!(key.code, KeyCode::Char(',' | '.')) {
                 let direction = if key.code == KeyCode::Char('.') {
@@ -231,9 +215,10 @@ pub fn play(
                 } else {
                     -1.0
                 };
-                dashboard.volume =
-                    (dashboard.volume + direction * VOLUME_STEP).clamp(0.0, MAX_VOLUME);
-                player.set_volume(dashboard.volume);
+                dashboard.playback.apply(
+                    Command::Volume(dashboard.playback.volume + direction * VOLUME_STEP),
+                    &player,
+                );
             }
             if matches!(key.code, KeyCode::Char('f' | 'b')) {
                 let current = dashboard.live.as_ref().map_or(0, |item| item.step.beat);
@@ -246,24 +231,35 @@ pub fn play(
                         -SEEK_SECONDS
                     },
                 );
-                let _ = planner.continue_from(target);
-                pending = QueuedBeat {
-                    step: Step {
-                        beat: target,
-                        jumped_from: None,
-                    },
-                    probability: 1.0,
-                };
-                player.clear();
-                if !dashboard.paused {
-                    player.play();
-                }
-                dashboard.queue.clear();
-                dashboard.live = Some(pending.clone());
-                dashboard.choices = planner.next_probabilities();
+                pending = restart_at(target, &mut planner, &player, &mut dashboard);
             }
+            dashboard.publish(&mut remote);
         }
     }
+}
+
+fn restart_at(
+    target: usize,
+    planner: &mut PlaybackPlanner,
+    player: &Player,
+    dashboard: &mut Dashboard<'_>,
+) -> QueuedBeat {
+    let _ = planner.continue_from(target);
+    let pending = QueuedBeat {
+        step: Step {
+            beat: target,
+            jumped_from: None,
+        },
+        probability: 1.0,
+    };
+    player.clear();
+    if dashboard.playback.status == PlaybackStatus::Playing {
+        player.play();
+    }
+    dashboard.queue.clear();
+    dashboard.live = Some(pending.clone());
+    dashboard.choices = planner.next_probabilities();
+    pending
 }
 
 fn plan_next(planner: &mut PlaybackPlanner) -> Result<QueuedBeat> {
@@ -349,10 +345,10 @@ fn draw_header(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
             Style::default().fg(INK).add_modifier(Modifier::BOLD),
         ),
     ]);
-    let (state, state_color) = if dashboard.paused {
-        ("  PAUSED  ", YELLOW)
-    } else {
-        ("  PLAYING  ", GREEN)
+    let (state, state_color) = match dashboard.playback.status {
+        PlaybackStatus::Paused => ("  PAUSED  ", YELLOW),
+        PlaybackStatus::Playing => ("  PLAYING  ", GREEN),
+        PlaybackStatus::Stopped => ("  STOPPED  ", MUTED),
     };
     let status = Line::from(vec![
         Span::styled(
@@ -376,7 +372,7 @@ fn draw_header(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
     let volume_width = 28.min(area.width.saturating_sub(2));
     if volume_width > 0 && area.height > 2 {
         let bar_width = 14;
-        let filled = ((dashboard.volume / MAX_VOLUME) * bar_width as f32).round() as usize;
+        let filled = ((dashboard.playback.volume / MAX_VOLUME) * bar_width as f32).round() as usize;
         let volume = Line::from(vec![
             Span::styled("VOL ", Style::default().fg(YELLOW)),
             Span::styled("█".repeat(filled), Style::default().fg(YELLOW)),
@@ -385,7 +381,10 @@ fn draw_header(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
                 Style::default().fg(VOLUME_TRACK),
             ),
             Span::styled(
-                format!(" {:>3}%", (dashboard.volume * 100.0).round() as u16),
+                format!(
+                    " {:>3}%",
+                    (dashboard.playback.volume * 100.0).round() as u16
+                ),
                 Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
             ),
         ]);
@@ -664,7 +663,7 @@ fn draw_choices(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
-    let elapsed = dashboard.session_clock.elapsed().as_secs();
+    let elapsed = dashboard.playback.elapsed().as_secs();
     let text = Line::from(vec![
         Span::styled(
             format!(
@@ -688,7 +687,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
             Style::default().fg(YELLOW),
         ),
     ]);
-    frame.render_widget(Paragraph::new(text).block(panel("SESSION")), area);
+    let title = if dashboard.controls_disconnected {
+        "SESSION • external controls disconnected"
+    } else {
+        "SESSION"
+    };
+    frame.render_widget(Paragraph::new(text).block(panel(title)), area);
 }
 
 fn jump_direction(source: usize, destination: usize) -> &'static str {
@@ -696,40 +700,5 @@ fn jump_direction(source: usize, destination: usize) -> &'static str {
         "backward"
     } else {
         "forward"
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn session_clock_does_not_advance_while_paused() {
-        let started = Instant::now();
-        let clock = SessionClock {
-            started,
-            paused_at: Some(started + Duration::from_secs(5)),
-            paused_for: Duration::ZERO,
-        };
-
-        assert_eq!(
-            clock.elapsed_at(started + Duration::from_secs(20)),
-            Duration::from_secs(5)
-        );
-    }
-
-    #[test]
-    fn session_clock_excludes_completed_pauses() {
-        let started = Instant::now();
-        let clock = SessionClock {
-            started,
-            paused_at: None,
-            paused_for: Duration::from_secs(7),
-        };
-
-        assert_eq!(
-            clock.elapsed_at(started + Duration::from_secs(20)),
-            Duration::from_secs(13)
-        );
     }
 }
