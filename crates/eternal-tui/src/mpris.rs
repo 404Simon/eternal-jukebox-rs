@@ -1,7 +1,7 @@
 //! MPRIS transport. Only the TUI applies commands; D-Bus reads published snapshots.
 
 use std::{
-    future::Future,
+    future::{Future, ready},
     path::Path,
     sync::Mutex,
     time::{Duration, Instant},
@@ -231,51 +231,51 @@ fn unsupported() -> fdo::Error {
 }
 
 impl RootInterface for Interface {
-    async fn raise(&self) -> fdo::Result<()> {
-        Err(unsupported())
+    fn raise(&self) -> impl Future<Output = fdo::Result<()>> {
+        ready(Err(unsupported()))
     }
-    async fn quit(&self) -> fdo::Result<()> {
-        Err(unsupported())
+    fn quit(&self) -> impl Future<Output = fdo::Result<()>> {
+        ready(Err(unsupported()))
     }
-    async fn can_quit(&self) -> fdo::Result<bool> {
-        Ok(false)
+    fn can_quit(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(false))
     }
-    async fn fullscreen(&self) -> fdo::Result<bool> {
-        Ok(false)
+    fn fullscreen(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(false))
     }
-    async fn set_fullscreen(&self, _: bool) -> zbus::Result<()> {
-        Err(unsupported().into())
+    fn set_fullscreen(&self, _: bool) -> impl Future<Output = zbus::Result<()>> {
+        ready(Err(unsupported().into()))
     }
-    async fn can_set_fullscreen(&self) -> fdo::Result<bool> {
-        Ok(false)
+    fn can_set_fullscreen(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(false))
     }
-    async fn can_raise(&self) -> fdo::Result<bool> {
-        Ok(false)
+    fn can_raise(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(false))
     }
-    async fn has_track_list(&self) -> fdo::Result<bool> {
-        Ok(false)
+    fn has_track_list(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(false))
     }
-    async fn identity(&self) -> fdo::Result<String> {
-        Ok("Eternal Jukebox".into())
+    fn identity(&self) -> impl Future<Output = fdo::Result<String>> {
+        ready(Ok("Eternal Jukebox".into()))
     }
-    async fn desktop_entry(&self) -> fdo::Result<String> {
-        Ok(String::new())
+    fn desktop_entry(&self) -> impl Future<Output = fdo::Result<String>> {
+        ready(Ok(String::new()))
     }
-    async fn supported_uri_schemes(&self) -> fdo::Result<Vec<String>> {
-        Ok(Vec::new())
+    fn supported_uri_schemes(&self) -> impl Future<Output = fdo::Result<Vec<String>>> {
+        ready(Ok(Vec::new()))
     }
-    async fn supported_mime_types(&self) -> fdo::Result<Vec<String>> {
-        Ok(Vec::new())
+    fn supported_mime_types(&self) -> impl Future<Output = fdo::Result<Vec<String>>> {
+        ready(Ok(Vec::new()))
     }
 }
 
 impl PlayerInterface for Interface {
     // The single endless stream has neither next/previous tracks nor absolute seeking.
-    async fn next(&self) -> fdo::Result<()> {
-        Ok(())
+    fn next(&self) -> impl Future<Output = fdo::Result<()>> {
+        ready(Ok(()))
     }
-    async fn previous(&self) -> fdo::Result<()> {
-        Ok(())
+    fn previous(&self) -> impl Future<Output = fdo::Result<()>> {
+        ready(Ok(()))
     }
     async fn pause(&self) -> fdo::Result<()> {
         self.command(Command::Pause).await
@@ -289,26 +289,26 @@ impl PlayerInterface for Interface {
     async fn play(&self) -> fdo::Result<()> {
         self.command(Command::Play).await
     }
-    async fn seek(&self, _: Time) -> fdo::Result<()> {
-        Ok(())
+    fn seek(&self, _: Time) -> impl Future<Output = fdo::Result<()>> {
+        ready(Ok(()))
     }
-    async fn set_position(&self, _: TrackId, _: Time) -> fdo::Result<()> {
-        Ok(())
+    fn set_position(&self, _: TrackId, _: Time) -> impl Future<Output = fdo::Result<()>> {
+        ready(Ok(()))
     }
-    async fn open_uri(&self, _: String) -> fdo::Result<()> {
-        Err(unsupported())
+    fn open_uri(&self, _: String) -> impl Future<Output = fdo::Result<()>> {
+        ready(Err(unsupported()))
     }
-    async fn playback_status(&self) -> fdo::Result<PlaybackStatus> {
-        Ok(self.snapshot.lock().expect("snapshot poisoned").status)
+    fn playback_status(&self) -> impl Future<Output = fdo::Result<PlaybackStatus>> {
+        ready(Ok(self.snapshot.lock().expect("snapshot poisoned").status))
     }
-    async fn loop_status(&self) -> fdo::Result<LoopStatus> {
-        Ok(LoopStatus::None)
+    fn loop_status(&self) -> impl Future<Output = fdo::Result<LoopStatus>> {
+        ready(Ok(LoopStatus::None))
     }
-    async fn set_loop_status(&self, _: LoopStatus) -> zbus::Result<()> {
-        Err(unsupported().into())
+    fn set_loop_status(&self, _: LoopStatus) -> impl Future<Output = zbus::Result<()>> {
+        ready(Err(unsupported().into()))
     }
-    async fn rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(1.0)
+    fn rate(&self) -> impl Future<Output = fdo::Result<PlaybackRate>> {
+        ready(Ok(1.0))
     }
     #[allow(clippy::float_cmp)] // Only exactly normal speed is supported.
     async fn set_rate(&self, rate: PlaybackRate) -> zbus::Result<()> {
@@ -320,19 +320,19 @@ impl PlayerInterface for Interface {
             Err(unsupported().into())
         }
     }
-    async fn shuffle(&self) -> fdo::Result<bool> {
-        Ok(false)
+    fn shuffle(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(false))
     }
-    async fn set_shuffle(&self, _: bool) -> zbus::Result<()> {
-        Err(unsupported().into())
+    fn set_shuffle(&self, _: bool) -> impl Future<Output = zbus::Result<()>> {
+        ready(Err(unsupported().into()))
     }
-    async fn metadata(&self) -> fdo::Result<Metadata> {
-        Ok(self.metadata.clone())
+    fn metadata(&self) -> impl Future<Output = fdo::Result<Metadata>> {
+        ready(Ok(self.metadata.clone()))
     }
-    async fn volume(&self) -> fdo::Result<Volume> {
-        Ok(f64::from(
+    fn volume(&self) -> impl Future<Output = fdo::Result<Volume>> {
+        ready(Ok(f64::from(
             self.snapshot.lock().expect("snapshot poisoned").volume,
-        ))
+        )))
     }
     async fn set_volume(&self, volume: Volume) -> zbus::Result<()> {
         if !volume.is_finite() {
@@ -344,40 +344,40 @@ impl PlayerInterface for Interface {
         .await
         .map_err(Into::into)
     }
-    async fn position(&self) -> fdo::Result<Time> {
+    fn position(&self) -> impl Future<Output = fdo::Result<Time>> {
         let snapshot = self.snapshot.lock().expect("snapshot poisoned");
         let elapsed = if snapshot.status == PlaybackStatus::Playing {
             snapshot.updated.elapsed()
         } else {
             Duration::ZERO
         };
-        Ok(Time::from_micros(
+        ready(Ok(Time::from_micros(
             i64::try_from((snapshot.position + elapsed).as_micros()).unwrap_or(i64::MAX),
-        ))
+        )))
     }
-    async fn minimum_rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(1.0)
+    fn minimum_rate(&self) -> impl Future<Output = fdo::Result<PlaybackRate>> {
+        ready(Ok(1.0))
     }
-    async fn maximum_rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(1.0)
+    fn maximum_rate(&self) -> impl Future<Output = fdo::Result<PlaybackRate>> {
+        ready(Ok(1.0))
     }
-    async fn can_go_next(&self) -> fdo::Result<bool> {
-        Ok(false)
+    fn can_go_next(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(false))
     }
-    async fn can_go_previous(&self) -> fdo::Result<bool> {
-        Ok(false)
+    fn can_go_previous(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(false))
     }
-    async fn can_play(&self) -> fdo::Result<bool> {
-        Ok(self.snapshot.lock().expect("snapshot poisoned").ready)
+    fn can_play(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(self.snapshot.lock().expect("snapshot poisoned").ready))
     }
     async fn can_pause(&self) -> fdo::Result<bool> {
         self.can_play().await
     }
-    async fn can_seek(&self) -> fdo::Result<bool> {
-        Ok(false)
+    fn can_seek(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(false))
     }
-    async fn can_control(&self) -> fdo::Result<bool> {
-        Ok(true)
+    fn can_control(&self) -> impl Future<Output = fdo::Result<bool>> {
+        ready(Ok(true))
     }
 }
 
