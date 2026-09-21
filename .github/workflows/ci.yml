@@ -20,7 +20,7 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install --yes libasound2-dev cmake dbus playerctl
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
       - name: Cache Rust build data
@@ -46,7 +46,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: wasm32-unknown-unknown
       - name: Cache Rust build data
