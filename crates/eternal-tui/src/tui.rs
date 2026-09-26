@@ -3,7 +3,11 @@ use std::{
     io::{self, Stdout},
     num::NonZero,
     path::Path,
-    time::Duration,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -22,7 +26,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph, Row, Table},
 };
-use rodio::{DeviceSinkBuilder, Player};
+use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
 
 use crate::audio_source::BeatSource;
 use crate::mpris::Service;
@@ -32,6 +36,7 @@ const QUEUED_BEATS: usize = 8;
 const HISTORY_LENGTH: usize = 256;
 const VOLUME_STEP: f32 = 0.05;
 const SEEK_SECONDS: f64 = 10.0;
+const AUDIO_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 const INK: Color = Color::Rgb(205, 214, 244);
 const MUTED: Color = Color::Rgb(108, 112, 134);
@@ -44,6 +49,35 @@ pub(crate) const YELLOW: Color = Color::Rgb(249, 226, 175);
 
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+}
+
+struct AudioOutput {
+    _sink: MixerDeviceSink,
+    player: Player,
+    failed: Arc<AtomicBool>,
+}
+
+impl AudioOutput {
+    fn open() -> Result<Self> {
+        let failed = Arc::new(AtomicBool::new(false));
+        let callback_failed = Arc::clone(&failed);
+        let mut sink = DeviceSinkBuilder::from_default_device()
+            .context("could not find the default audio output device")?
+            .with_error_callback(move |_| callback_failed.store(true, Ordering::Release))
+            .open_sink_or_fallback()
+            .context("could not open the default audio output device")?;
+        sink.log_on_drop(false);
+        let player = Player::connect_new(sink.mixer());
+        Ok(Self {
+            _sink: sink,
+            player,
+            failed,
+        })
+    }
+
+    fn take_failure(&self) -> bool {
+        self.failed.swap(false, Ordering::AcqRel)
+    }
 }
 
 impl TerminalGuard {
@@ -82,6 +116,7 @@ struct Dashboard<'a> {
     coverage: Vec<u32>,
     jump_count: u64,
     controls_disconnected: bool,
+    audio_disconnected: bool,
 }
 
 impl<'a> Dashboard<'a> {
@@ -102,6 +137,7 @@ impl<'a> Dashboard<'a> {
             coverage: vec![0; analysis.beats.len()],
             jump_count: 0,
             controls_disconnected: false,
+            audio_disconnected: false,
         }
     }
 
@@ -143,10 +179,7 @@ pub fn play(
     input: &Path,
     mut remote: Option<Service>,
 ) -> Result<()> {
-    let mut output = DeviceSinkBuilder::open_default_sink()
-        .context("could not open the default audio output device")?;
-    output.log_on_drop(false);
-    let player = Player::connect_new(output.mixer());
+    let mut output = AudioOutput::open()?;
     NonZero::new(audio.channels).context("audio has no channels")?;
     NonZero::new(audio.sample_rate).context("audio has no sample rate")?;
     let mut planner = seed.map_or_else(
@@ -154,23 +187,33 @@ pub fn play(
         |seed| PlaybackPlanner::with_seed(graph.clone(), seed),
     );
     let mut pending = plan_next(&mut planner)?;
-    let mut dashboard = Dashboard::new(analysis, graph, input, player.volume());
+    let mut dashboard = Dashboard::new(analysis, graph, input, output.player.volume());
     let mut terminal = TerminalGuard::new()?;
+    let mut next_audio_retry = Instant::now();
     dashboard.publish(&mut remote);
 
     loop {
+        if let Some(restarted) = maintain_audio(
+            &mut output,
+            &mut planner,
+            &mut dashboard,
+            &mut next_audio_retry,
+        ) {
+            pending = restarted;
+        }
+
         // Bound work per frame, even if a client keeps sending commands.
         for _ in 0..16 {
             let Some(request) = remote.as_ref().and_then(Service::next_request) else {
                 break;
             };
-            if dashboard.playback.apply(request.command, &player) {
-                pending = restart_at(0, &mut planner, &player, &mut dashboard);
+            if dashboard.playback.apply(request.command, &output.player) {
+                pending = restart_at(0, &mut planner, &output.player, &mut dashboard);
             }
             dashboard.publish(&mut remote);
             request.complete();
         }
-        while player.len() < QUEUED_BEATS {
+        while output.player.len() < QUEUED_BEATS {
             let next = plan_next(&mut planner)?;
             let beat = &analysis.beats[pending.step.beat];
             let source = BeatSource::new(
@@ -180,12 +223,12 @@ pub fn play(
                 pending.step.jumped_from.is_some(),
                 next.step.jumped_from.is_some(),
             );
-            player.append(source);
+            output.player.append(source);
             dashboard.queue.push_back(pending);
             pending = next;
         }
 
-        while dashboard.queue.len() > player.len().max(1) {
+        while dashboard.queue.len() > output.player.len().max(1) {
             if let Some(finished) = dashboard.queue.pop_front() {
                 dashboard.record_finished(finished);
             }
@@ -207,7 +250,7 @@ pub fn play(
                 return Ok(());
             }
             if key.code == KeyCode::Char('p') {
-                dashboard.playback.apply(Command::Toggle, &player);
+                dashboard.playback.apply(Command::Toggle, &output.player);
             }
             if matches!(key.code, KeyCode::Char(',' | '.')) {
                 let direction = if key.code == KeyCode::Char('.') {
@@ -217,7 +260,7 @@ pub fn play(
                 };
                 dashboard.playback.apply(
                     Command::Volume(dashboard.playback.volume + direction * VOLUME_STEP),
-                    &player,
+                    &output.player,
                 );
             }
             if matches!(key.code, KeyCode::Char('f' | 'b')) {
@@ -231,11 +274,39 @@ pub fn play(
                         -SEEK_SECONDS
                     },
                 );
-                pending = restart_at(target, &mut planner, &player, &mut dashboard);
+                pending = restart_at(target, &mut planner, &output.player, &mut dashboard);
             }
             dashboard.publish(&mut remote);
         }
     }
+}
+
+fn maintain_audio(
+    output: &mut AudioOutput,
+    planner: &mut PlaybackPlanner,
+    dashboard: &mut Dashboard<'_>,
+    next_retry: &mut Instant,
+) -> Option<QueuedBeat> {
+    let now = Instant::now();
+    if output.take_failure() {
+        dashboard.audio_disconnected = true;
+        *next_retry = now;
+    }
+    if !dashboard.audio_disconnected || now < *next_retry {
+        return None;
+    }
+
+    *next_retry = now + AUDIO_RETRY_INTERVAL;
+    let replacement = AudioOutput::open().ok()?;
+    replacement.player.set_volume(dashboard.playback.volume);
+    if dashboard.playback.status != PlaybackStatus::Playing {
+        replacement.player.pause();
+    }
+    *output = replacement;
+    let current = dashboard.live.as_ref().map_or(0, |item| item.step.beat);
+    let pending = restart_at(current, planner, &output.player, dashboard);
+    dashboard.audio_disconnected = false;
+    Some(pending)
 }
 
 fn restart_at(
@@ -687,10 +758,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
             Style::default().fg(YELLOW),
         ),
     ]);
-    let title = if dashboard.controls_disconnected {
-        "SESSION • external controls disconnected"
-    } else {
-        "SESSION"
+    let title = match (
+        dashboard.audio_disconnected,
+        dashboard.controls_disconnected,
+    ) {
+        (true, true) => "SESSION • audio reconnecting • external controls disconnected",
+        (true, false) => "SESSION • audio reconnecting",
+        (false, true) => "SESSION • external controls disconnected",
+        (false, false) => "SESSION",
     };
     frame.render_widget(Paragraph::new(text).block(panel(title)), area);
 }
