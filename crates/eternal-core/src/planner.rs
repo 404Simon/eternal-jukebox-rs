@@ -42,7 +42,8 @@ pub struct PlaybackPlanner {
 impl PlaybackPlanner {
     #[must_use]
     pub fn new(graph: BranchGraph) -> Self {
-        Self::with_seed(graph, rand::rng().random())
+        let seed = getrandom::u64().expect("could not obtain a random playback seed");
+        Self::with_seed(graph, seed)
     }
 
     #[must_use]

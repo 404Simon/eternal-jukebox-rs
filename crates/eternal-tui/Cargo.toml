@@ -20,7 +20,6 @@ crossterm.workspace = true
 eternal-core = { path = "../eternal-core" }
 futures-lite = "2.6"
 mpris-server = { version = "0.10", features = ["unstable"] }
-rand.workspace = true
 ratatui.workspace = true
 rodio.workspace = true
 
