@@ -4,13 +4,11 @@ use std::sync::Arc;
 use std::{fs::File, path::Path, sync::OnceLock};
 #[cfg(not(target_arch = "wasm32"))]
 use symphonia::core::{
-    audio::SampleBuffer,
-    codecs::{CodecRegistry, DecoderOptions},
+    codecs::{audio::AudioDecoderOptions, registry::CodecRegistry},
     errors::Error as SymphoniaError,
-    formats::FormatOptions,
+    formats::{FormatOptions, TrackType, probe::Hint},
     io::{MediaSourceStream, MediaSourceStreamOptions},
     meta::MetadataOptions,
-    probe::Hint,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use symphonia_adapter_libopus::OpusDecoder;
@@ -23,7 +21,7 @@ fn codecs() -> &'static CodecRegistry {
     CODECS.get_or_init(|| {
         let mut codecs = CodecRegistry::new();
         symphonia::default::register_enabled_codecs(&mut codecs);
-        codecs.register_all::<OpusDecoder>();
+        codecs.register_audio_decoder::<OpusDecoder>();
         codecs
     })
 }
@@ -97,25 +95,31 @@ pub fn decode(path: impl AsRef<Path>) -> Result<Audio, AudioError> {
     }
 
     let source = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
-    let probed = symphonia::default::get_probe()
-        .format(
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &hint,
             source,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .map_err(AudioError::Probe)?;
-    let mut format = probed.format;
-    let track = format.default_track().ok_or(AudioError::NoTrack)?;
+    let track = format
+        .default_track(TrackType::Audio)
+        .ok_or(AudioError::NoTrack)?;
     let track_id = track.id;
+    let params = track
+        .codec_params
+        .as_ref()
+        .and_then(|params| params.audio())
+        .ok_or(AudioError::NoTrack)?;
     let mut codec = codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make_audio_decoder(params, &AudioDecoderOptions::default())
         .map_err(AudioError::Decode)?;
 
     let mut output = Vec::new();
     let mut signal_spec = None;
-    while let Ok(packet) = format.next_packet() {
-        if packet.track_id() != track_id {
+    while let Ok(Some(packet)) = format.next_packet() {
+        if packet.track_id != track_id {
             continue;
         }
         let decoded = match codec.decode(&packet) {
@@ -123,28 +127,31 @@ pub fn decode(path: impl AsRef<Path>) -> Result<Audio, AudioError> {
             Err(SymphoniaError::DecodeError(_)) => continue,
             Err(source) => return Err(AudioError::Decode(source)),
         };
-        let spec = *decoded.spec();
-        if signal_spec.is_some_and(|previous| previous != spec) {
+        let spec = decoded.spec();
+        if signal_spec
+            .as_ref()
+            .is_some_and(|previous| previous != spec)
+        {
             return Err(AudioError::FormatChanged);
         }
-        signal_spec = Some(spec);
-        let mut samples = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-        samples.copy_interleaved_ref(decoded);
-        output.extend_from_slice(samples.samples());
+        signal_spec = Some(spec.clone());
+        let start = output.len();
+        output.resize(start + decoded.samples_interleaved(), 0.0);
+        decoded.copy_to_slice_interleaved(&mut output[start..]);
     }
 
     let spec = signal_spec.ok_or(AudioError::MissingSignalSpec)?;
     Ok(Audio {
         samples: output.into(),
-        sample_rate: spec.rate,
-        channels: spec.channels.count() as u16,
+        sample_rate: spec.rate(),
+        channels: spec.channels().count() as u16,
     })
 }
 
 #[cfg(test)]
 mod tests {
     #[cfg(not(target_arch = "wasm32"))]
-    use symphonia::core::codecs::CODEC_TYPE_OPUS;
+    use symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS;
 
     #[cfg(not(target_arch = "wasm32"))]
     use super::codecs;
@@ -152,6 +159,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn opus_decoder_is_registered() {
-        assert!(codecs().get_codec(CODEC_TYPE_OPUS).is_some());
+        assert!(codecs().get_audio_decoder(CODEC_ID_OPUS).is_some());
     }
 }
