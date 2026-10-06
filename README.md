@@ -26,13 +26,14 @@ cargo run --release -p eternal-tui -- song.mp3
 MP3 and Opus files are supported, including Opus audio in Ogg, WebM, and
 Matroska containers.
 
-Press Ctrl-C to stop. The first start compiles the release binary; to install
-it on your path instead, run:
+Press Ctrl-C to stop. To install the released binary from crates.io, run:
 
 ```sh
-cargo install --path crates/eternal-tui
+cargo install eternal-tui
 eternal song.mp3
 ```
+
+To install the local checkout instead, run `cargo install --path crates/eternal-tui`.
 
 The interactive Ratatui dashboard shows the audible and queued beats, live
 stitching, recent jumps, and the planner's adaptive transition odds.

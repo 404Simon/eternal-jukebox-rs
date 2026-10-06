@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+keywords = ["tui", "music", "audio", "player", "eternal-jukebox"]
+categories = ["command-line-utilities", "multimedia"]
 
 [[bin]]
 name = "eternal"
@@ -17,7 +19,7 @@ async-channel = "2.5"
 async-io = "2.6"
 clap.workspace = true
 crossterm.workspace = true
-eternal-core = { path = "../eternal-core" }
+eternal-core = { path = "../eternal-core", version = "0.1.0" }
 futures-lite = "2.6"
 mpris-server = { version = "0.10", features = ["unstable"] }
 ratatui.workspace = true

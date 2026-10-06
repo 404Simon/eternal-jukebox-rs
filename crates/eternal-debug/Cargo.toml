@@ -1,7 +1,9 @@
 [package]
 name = "eternal-debug"
 description = "Deterministic playback simulator for Eternal Jukebox development"
-version.workspace = true
+# Internal tooling, never released: version is pinned, not workspace-inherited.
+version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -14,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-eternal-core = { path = "../eternal-core" }
+eternal-core = { path = "../eternal-core", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 

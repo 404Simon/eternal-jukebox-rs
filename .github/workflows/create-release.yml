@@ -1,0 +1,63 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump (patch, minor or major)'
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  bump-and-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-edit
+        run: cargo binstall cargo-edit --no-confirm --locked
+
+      - name: Bump version
+        run: |
+          # Only eternal-core and eternal-tui are released. eternal-debug and
+          # eternal-web are internal crates with pinned versions (publish = false).
+          cargo set-version --bump "${{ inputs.bump }}" --workspace --exclude eternal-debug --exclude eternal-web
+          # Re-resolve the workspace so Cargo.lock is updated
+          cargo metadata --format-version 1 > /dev/null
+
+          VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "eternal-tui") | .version')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Cargo.toml Cargo.lock crates/eternal-core/Cargo.toml crates/eternal-debug/Cargo.toml crates/eternal-tui/Cargo.toml crates/eternal-web/Cargo.toml
+          git commit -m "chore: release v$VERSION [no ci]"
+
+          git tag "v$VERSION"
+
+          git push
+          git push origin "v$VERSION"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh release create "v$VERSION" \
+            --draft=false \
+            --prerelease=false \
+            --generate-notes

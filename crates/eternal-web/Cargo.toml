@@ -1,7 +1,9 @@
 [package]
 name = "eternal-web"
 description = "WebAssembly bindings for Eternal Jukebox"
-version.workspace = true
+# Internal-only crate, never released: version is pinned, not workspace-inherited.
+version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,7 +13,7 @@ rust-version.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-eternal-core = { path = "../eternal-core" }
+eternal-core = { path = "../eternal-core", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen.workspace = true
