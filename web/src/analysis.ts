@@ -6,7 +6,10 @@ interface WorkerResponse {
   prepared?: string
 }
 
-export async function analyseBuffer(buffer: AudioBuffer): Promise<PreparedTrack> {
+export async function analyseBuffer(
+  buffer: AudioBuffer,
+  options?: { threshold?: number | null; islandThresholdSeconds?: number | null },
+): Promise<PreparedTrack> {
   const samples = interleave(buffer)
   const prepared = await new Promise<string>((resolve, reject) => {
     const worker = new Worker(new URL('./analyse.worker.ts', import.meta.url), { type: 'module' })
@@ -23,7 +26,13 @@ export async function analyseBuffer(buffer: AudioBuffer): Promise<PreparedTrack>
       reject(new Error(event.message))
     }
     worker.postMessage(
-      { samples, sampleRate: buffer.sampleRate, channels: buffer.numberOfChannels },
+      {
+        samples,
+        sampleRate: buffer.sampleRate,
+        channels: buffer.numberOfChannels,
+        threshold: options?.threshold ?? null,
+        islandThresholdSeconds: options?.islandThresholdSeconds ?? null,
+      },
       [samples.buffer],
     )
   })

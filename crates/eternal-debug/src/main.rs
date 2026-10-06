@@ -10,6 +10,7 @@ use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use eternal_core::{
     Analysis, AnalysisConfig, BranchConfig, BranchGraph, PlaybackPlanner, analyse, decode,
+    resolve_spider_traps,
 };
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +54,9 @@ struct Cli {
     /// Override the graph's adaptive distance threshold.
     #[arg(long)]
     threshold: Option<f32>,
+    /// Prune jump-isolated regions shorter than this many seconds (0 disables).
+    #[arg(long)]
+    island_threshold: Option<f64>,
     /// Fail if any run exceeds this number of physical end-of-file restarts.
     #[arg(long)]
     max_wraps: Option<usize>,
@@ -78,16 +82,27 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     for input in &cli.inputs {
         let cached = prepare(input, cli.no_cache)?;
-        let graph = BranchGraph::build(
+        let branch_config = BranchConfig {
+            maximum_branches: cli.max_branches,
+            target_branch_fraction: cli.branch_fraction,
+            threshold: cli.threshold,
+            island_threshold_seconds: cli
+                .island_threshold
+                .or(BranchConfig::default().island_threshold_seconds),
+            ..BranchConfig::default()
+        };
+        let graph = BranchGraph::build(&cached.analysis, &branch_config);
+        print_graph(input, &cached.analysis, &graph);
+        // Analyse the unpruned reference so cleared traps stay visible.
+        let reference = BranchGraph::build(
             &cached.analysis,
             &BranchConfig {
-                maximum_branches: cli.max_branches,
-                target_branch_fraction: cli.branch_fraction,
-                threshold: cli.threshold,
-                ..BranchConfig::default()
+                island_threshold_seconds: None,
+                ..branch_config.clone()
             },
         );
-        print_graph(input, &cached.analysis, &graph);
+        print_islands(&cached.analysis, &reference);
+        print_trap(&cached.analysis, &reference, &branch_config);
         for &beat in &cli.inspect {
             print_branches(&graph, beat);
         }
@@ -208,6 +223,122 @@ fn print_graph(input: &Path, analysis: &Analysis, graph: &BranchGraph) {
         .collect::<Vec<_>>()
         .join(",");
     println!("GRAPH best_long=[{labels}]");
+}
+
+/// Report jump-isolated beat ranges on the unpruned reference graph.
+///
+/// Pure jump structure: which ranges hold arcs. Whether any of them is a
+/// trap is decided on the directed graph, see the TRAP line.
+fn print_islands(analysis: &Analysis, reference: &BranchGraph) {
+    // Jumpless beats carry no information; collapse them into gaps so the
+    // ranges with actual jumps stand out.
+    let mut labels = Vec::new();
+    let mut gap: Option<std::ops::Range<usize>> = None;
+    let flush_gap = |gap: &mut Option<std::ops::Range<usize>>, labels: &mut Vec<String>| {
+        if let Some(range) = gap.take() {
+            let start = analysis.beats[range.start].start;
+            let end = analysis.beats[range.end - 1].start + analysis.beats[range.end - 1].duration;
+            labels.push(format!(
+                "beats={}-{} time={:.1}-{:.1}s gap",
+                range.start,
+                range.end - 1,
+                start,
+                end
+            ));
+        }
+    };
+    let exit = reference.forced_exit_source();
+    for (index, segment) in reference.jump_segments().iter().enumerate() {
+        let edges: usize = segment
+            .clone()
+            .map(|beat| reference.branches[beat].len())
+            .sum();
+        // The opening segment always survives (playback starts at beat 0),
+        // so it is never folded into a gap.
+        if edges == 0 && index > 0 {
+            gap = Some(match gap.take() {
+                Some(existing) => existing.start..segment.end,
+                None => segment.clone(),
+            });
+            continue;
+        }
+        flush_gap(&mut gap, &mut labels);
+        let start = analysis.beats[segment.start].start;
+        let end = analysis.beats[segment.end - 1].start + analysis.beats[segment.end - 1].duration;
+        let state = if index == 0 {
+            " MAIN"
+        } else if exit.is_some_and(|exit| segment.contains(&exit)) {
+            " EXIT"
+        } else {
+            ""
+        };
+        labels.push(format!(
+            "beats={}-{} time={:.1}-{:.1}s edges={}{state}",
+            segment.start,
+            segment.end - 1,
+            start,
+            end,
+            edges
+        ));
+    }
+    flush_gap(&mut gap, &mut labels);
+    println!("ISLANDS [{}]", labels.join(" | "));
+}
+
+/// Report the spider-trap chain: the directed-graph traps the builder cleared
+/// (or deliberately kept), in the order they seal each other.
+fn print_trap(analysis: &Analysis, reference: &BranchGraph, config: &BranchConfig) {
+    let Some(island_seconds) = config
+        .island_threshold_seconds
+        .filter(|seconds| *seconds > 0.0)
+    else {
+        println!("TRAP off (pruning disabled)");
+        return;
+    };
+    if reference.forced_exit_source().is_none() {
+        println!("TRAP none (no forced exit)");
+        return;
+    }
+    let durations: Vec<f64> = analysis.beats.iter().map(|beat| beat.duration).collect();
+    let chain = resolve_spider_traps(
+        &reference.branches,
+        &durations,
+        reference.threshold,
+        island_seconds,
+    );
+    let exit = reference.forced_exit_source().unwrap_or(0);
+    if chain.steps.is_empty() {
+        let trap = reference.spider_trap();
+        let seconds: f64 = trap.iter().map(|&beat| durations[beat]).sum();
+        println!(
+            "TRAP exit={exit} trap={}-{} secs={seconds:.1} kept (structural loop)",
+            trap.first().unwrap_or(&0),
+            trap.last().unwrap_or(&0),
+        );
+        return;
+    }
+    let labels = chain
+        .steps
+        .iter()
+        .map(|trap| {
+            let seconds: f64 = trap.iter().map(|&beat| durations[beat]).sum();
+            let opening = trap.contains(&0);
+            format!(
+                "{}-{}:{:.1}s{}",
+                trap.first().unwrap_or(&0),
+                trap.last().unwrap_or(&0),
+                seconds,
+                if opening { ":opening" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" -> ");
+    let verdict = if chain.healthy {
+        "PRUNED"
+    } else {
+        "REVERTED (chain ends in intro loop)"
+    };
+    println!("TRAP exit={exit} chain=[{labels}] {verdict}");
 }
 
 fn print_branches(graph: &BranchGraph, beat: usize) {

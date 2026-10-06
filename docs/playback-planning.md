@@ -33,8 +33,13 @@ Audio analysis produces a graph whose nodes are beats:
 Every beat has an implicit sequential edge to the following beat. Some beats
 also have explicit branch edges to beats that sound similar at the transition.
 The graph builder has already rejected candidates with poor timing, pitch,
-timbre, loudness, or phrase context. The planner therefore chooses only among
-musically acceptable branches; it does not recalculate audio similarity.
+timbre, loudness, or phrase context. It also clears spider traps: beat ranges
+that playback can walk into sequentially but never leave, because the forced
+exit below seals them and no jump leads back out. Only short traps (40 seconds
+by default) are cleared, and only when the remaining graph still loops
+healthily; otherwise the graph is left untouched. The planner therefore
+chooses only among musically acceptable branches; it does not recalculate
+audio similarity.
 
 The branch source is the beat that would normally play next. For example, after
 playing beat 19, the planner considers the normal transition to beat 20 and all

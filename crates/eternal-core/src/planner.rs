@@ -50,17 +50,7 @@ impl PlaybackPlanner {
     pub fn with_seed(graph: BranchGraph, seed: u64) -> Self {
         // Only an ordinary, quality-qualified backward edge may become
         // mandatory. A relaxed graph fallback must never force a bad splice.
-        let loop_exit = graph
-            .branches
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(source, branches)| {
-                branches
-                    .iter()
-                    .any(|branch| branch.destination < source && branch.distance <= graph.threshold)
-                    .then_some(source)
-            });
+        let loop_exit = graph.forced_exit_source();
         let sequential_uses = vec![0; graph.branches.len()];
         let branch_uses = graph
             .branches

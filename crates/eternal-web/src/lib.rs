@@ -15,6 +15,7 @@ pub fn prepare_track(
     sample_rate: u32,
     channels: u16,
     threshold: Option<f32>,
+    island_threshold_seconds: Option<f64>,
 ) -> Result<String, JsError> {
     if samples.is_empty() || sample_rate == 0 || channels == 0 {
         return Err(JsError::new("audio contains no samples"));
@@ -26,6 +27,8 @@ pub fn prepare_track(
         &analysis,
         &BranchConfig {
             threshold,
+            island_threshold_seconds: island_threshold_seconds
+                .or(BranchConfig::default().island_threshold_seconds),
             ..BranchConfig::default()
         },
     );

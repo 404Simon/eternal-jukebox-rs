@@ -26,6 +26,9 @@ struct Cli {
     /// Override the automatically selected branch threshold.
     #[arg(long)]
     threshold: Option<f32>,
+    /// Prune jump-isolated regions shorter than this many seconds (0 disables).
+    #[arg(long)]
+    island_threshold: Option<f64>,
     /// Make the sequence reproducible.
     #[arg(long)]
     seed: Option<u64>,
@@ -34,9 +37,14 @@ struct Cli {
 impl Cli {
     fn validate(&self) -> Result<()> {
         if self.command.is_some()
-            && (self.input.is_some() || self.threshold.is_some() || self.seed.is_some())
+            && (self.input.is_some()
+                || self.threshold.is_some()
+                || self.island_threshold.is_some()
+                || self.seed.is_some())
         {
-            bail!("control commands cannot be combined with a file, --threshold, or --seed");
+            bail!(
+                "control commands cannot be combined with a file, --threshold, --island-threshold, or --seed"
+            );
         }
         Ok(())
     }
@@ -62,7 +70,7 @@ fn main() -> Result<()> {
     }
     let input = cli.input.expect("clap requires a file or a subcommand");
     let remote = mpris::Service::start(&input)?;
-    let (analysis, graph, audio) = prepare(&input, cli.threshold)?;
+    let (analysis, graph, audio) = prepare(&input, cli.threshold, cli.island_threshold)?;
     if graph.branch_count() == 0 {
         bail!("no usable transitions found; try a longer or more repetitive track");
     }
@@ -72,6 +80,7 @@ fn main() -> Result<()> {
 fn prepare(
     input: &PathBuf,
     threshold: Option<f32>,
+    island_threshold: Option<f64>,
 ) -> Result<(
     eternal_core::Analysis,
     eternal_core::BranchGraph,
@@ -85,6 +94,8 @@ fn prepare(
         &analysis,
         &BranchConfig {
             threshold,
+            island_threshold_seconds: island_threshold
+                .or(BranchConfig::default().island_threshold_seconds),
             ..BranchConfig::default()
         },
     );
@@ -106,10 +117,20 @@ mod tests {
 
     #[test]
     fn existing_file_syntax_and_flags_are_preserved() {
-        let cli =
-            Cli::try_parse_from(["eternal", "song.mp3", "--threshold", "0.5", "--seed", "42"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "eternal",
+            "song.mp3",
+            "--threshold",
+            "0.5",
+            "--island-threshold",
+            "30",
+            "--seed",
+            "42",
+        ])
+        .unwrap();
         assert_eq!(cli.input, Some(PathBuf::from("song.mp3")));
+        assert_eq!(cli.threshold, Some(0.5));
+        assert_eq!(cli.island_threshold, Some(30.0));
         assert_eq!(cli.seed, Some(42));
         assert!(cli.command.is_none());
         for path in ["./play", "./pause"] {
@@ -122,6 +143,7 @@ mod tests {
     fn missing_file_and_playback_flags_on_control_commands_are_rejected() {
         assert!(Cli::try_parse_from(["eternal"]).is_err());
         assert!(Cli::try_parse_from(["eternal", "pause", "--seed", "42"]).is_err());
+        assert!(Cli::try_parse_from(["eternal", "pause", "--island-threshold", "30"]).is_err());
         let cli = Cli::try_parse_from(["eternal", "--seed", "42", "pause"]).unwrap();
         assert!(cli.validate().is_err());
     }
