@@ -8,8 +8,10 @@ pub struct BranchConfig {
     pub minimum_separation: usize,
     pub target_branch_fraction: f32,
     pub threshold: Option<f32>,
-    /// Jump-isolated beat ranges shorter than this are stripped of all jumps.
-    /// `None` (or `Some(0.0)`) disables the pruning.
+    /// Spider traps shorter than this are stripped of all jumps.
+    /// `None` (or `Some(0.0)`) disables the pruning. The default sits just
+    /// above the largest known outro trap, with margin for decoder jitter:
+    /// resampling the same track can move a trap by a second or more.
     pub island_threshold_seconds: Option<f64>,
 }
 
@@ -20,7 +22,7 @@ impl Default for BranchConfig {
             minimum_separation: 4,
             target_branch_fraction: 1.0 / 10.0,
             threshold: None,
-            island_threshold_seconds: Some(40.0),
+            island_threshold_seconds: Some(45.0),
         }
     }
 }
