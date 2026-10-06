@@ -19,7 +19,7 @@ async-channel = "2.5"
 async-io = "2.6"
 clap.workspace = true
 crossterm.workspace = true
-eternal-core = { path = "../eternal-core", version = "0.1.0" }
+eternal-core = { path = "../eternal-core", version = "1.0.0" }
 futures-lite = "2.6"
 mpris-server = { version = "0.10", features = ["unstable"] }
 ratatui.workspace = true

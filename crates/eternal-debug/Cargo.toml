@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-eternal-core = { path = "../eternal-core", version = "0.1.0" }
+eternal-core = { path = "../eternal-core", version = "1.0.0" }
 serde.workspace = true
 serde_json.workspace = true
 
