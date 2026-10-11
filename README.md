@@ -1,92 +1,66 @@
 # Eternal Jukebox RS
 
-A local, dependency-light reimplementation of the Eternal Jukebox in Rust. It
-analyses an audio file, finds musically similar beats, and keeps playback going
-by jumping between them.
+Make a song play forever. Eternal Jukebox analyses an audio file, finds beats that sound alike, and keeps playback going by jumping between them.
 
-This project builds on the original idea and implementation from
-[EternalBox/EternalJukebox](https://github.com/EternalBox/EternalJukebox). Huge
-thanks to its creators and contributors for making the Eternal Jukebox concept
-available to the community.
+This is a from-scratch Rust implementation inspired by [EternalBox/EternalJukebox](https://github.com/EternalBox/EternalJukebox). It started as a port and has since grown into something bigger: analysis and playback run entirely on your machine, the planner was rewritten to loop more evenly, and the same engine now powers both a terminal player and a browser app.
 
-The project is split into reusable native and browser frontends:
+**[Try the browser demo](https://404simon.github.io/eternal-jukebox-rs/)**, it runs entirely in your browser, nothing is uploaded.
 
-- `eternal-core`: decoding, local beat/feature analysis, graph construction,
-  and the infinite playback planner.
-- `eternal-tui`: the interactive `eternal` terminal application and audio output.
-- `eternal-web`: a small WebAssembly interface over the same analysis and planner.
-- `web`: a Vite + React client that decodes and plays audio with the Web Audio API.
-
-## Quick start
-
-```sh
-cargo run --release -p eternal-tui -- song.mp3
-```
-
-MP3 and Opus files are supported, including Opus audio in Ogg, WebM, and
-Matroska containers.
-
-Press Ctrl-C to stop. To install the released binary from crates.io, run:
+## Install and run
 
 ```sh
 cargo install eternal-tui
 eternal song.mp3
 ```
 
-To install the local checkout instead, run `cargo install --path crates/eternal-tui`.
+Or straight from a checkout:
 
-The interactive Ratatui dashboard shows the audible and queued beats, live
-stitching, recent jumps, and the planner's adaptive transition odds.
+```sh
+cargo run --release -p eternal-tui -- song.mp3
+```
 
-Linux builds need ALSA development headers (`libasound2-dev` on Debian/Ubuntu,
-`alsa-lib-devel` on Fedora). Opus support bundles libopus and needs CMake and a C
-compiler when building. `ffmpeg` is not needed at runtime.
+MP3 and Opus are supported, including Opus in Ogg, WebM, and Matroska containers. Press Ctrl-C to stop.
 
-## Commands
+Linux builds need ALSA headers (`libasound2-dev` on Debian/Ubuntu, `alsa-lib-devel` on Fedora). Opus support bundles libopus and needs CMake and a C compiler at build time. `ffmpeg` is not needed at runtime.
+
+## Controls
 
 ```text
 eternal <FILE> [--threshold <DISTANCE>] [--seed <NUMBER>]
 eternal play | pause | toggle | status
 ```
 
-`eternal` decodes and analyses the entire file, then continuously queues individual
-beats. It usually plays the next beat, occasionally selects a similar beat, and
-strongly prefers a backward transition before reaching the end. `--seed` makes
-those choices reproducible. A lower `--threshold` permits fewer, closer matches.
+The TUI shows the audible and queued beats, live stitching, recent jumps, and the planner's current transition odds. A running player can be controlled from another terminal, and on Linux MPRIS adds desktop media keys and commands such as `playerctl --player=eternal play-pause`. Remote control needs a shared session D-Bus; local playback works without one.
 
-Control a running TUI from another terminal with `eternal play`, `pause`,
-`toggle`, or `status`. On Linux, MPRIS also enables desktop media controls and
-commands such as `playerctl --player=eternal play-pause`. External controls require
-the same session D-Bus; local playback works without it.
+`--seed` makes the jump choices reproducible, and `--threshold` tunes how close a match has to be. A lower threshold means fewer, tighter jumps.
 
-## Architecture
+## What's different from the original
 
-The implementation has no dependency on the old Kotlin server, Spotify audio
-analysis, or browser JavaScript:
+- **No server, no cloud analysis.** Decoding, beat detection, and feature extraction all happen locally, no Spotify/ECHO NEST API, no Kotlin backend.
+- **A stronger planner.** A seeded, reproducible random walk that escapes its own loops: used transitions and over-visited sections lose weight over time, and dead-end regions are pruned so playback can't get stuck.
+- **Better beat tracking.** Tempo is refined between FFT hops and phase-fit across the whole track, fixing the doubled-tempo mistakes the old integer-hop estimator made on drum & bass.
+- **Two frontends, one engine.** The same `eternal-core` drives the native TUI and a WebAssembly browser app.
+- **Built to be measured.** A deterministic playback simulator measures coverage and looping over millions of planned beats.
 
-- `audio` decodes interleaved floating-point PCM with Symphonia, using a
-  libopus-backed Symphonia adapter for Opus.
-- `analysis` uses spectral flux and autocorrelation for the beat grid, then
-  extracts chroma, spectral shape, loudness and onset strength for every beat.
-- `graph` ports the original nearest-neighbour idea: only same-position beats
-  are compared, attacks and neighbouring beats contribute to the transition
-  score, a dynamic threshold targets useful sparsity, and a final branch
-  boundary prevents playback from falling off the end.
-- `planner` performs a weighted infinite random walk. Used transitions and
-  frequently visited destinations gradually lose weight, so repeated loops
-  make unexplored branches and the sequential path more likely.
-- `eternal-tui` queues short, edge-faded PCM slices through Rodio for gapless
-  live playback.
+## Layout
 
-The local analyser is intentionally deterministic and self-contained. Its beat
-tracking is best on music with a steady pulse; unusual metres, strong tempo
-changes, or ambient material may benefit from an explicit `--threshold`, but a
-threshold cannot repair an incorrectly detected beat grid.
+| Crate           | What it is                                              |
+| --------------- | ------------------------------------------------------- |
+| `eternal-core`  | Decoding, analysis, graph construction, and the planner |
+| `eternal-tui`   | The `eternal` terminal player (Ratatui + Rodio + MPRIS) |
+| `eternal-web`   | WebAssembly bindings for the browser app                |
+| `eternal-debug` | Internal playback simulator (not published)             |
 
-See [Playback planning](docs/playback-planning.md) for a complete, approachable
-description of the random walker and its weighting rules. Maintainers can use
-the deterministic [playback simulator](docs/debug-simulator.md) to measure
-coverage and loop behaviour without playing audio.
+The `web/` directory holds the Vite + React client that plays audio through the Web Audio API.
+
+## How it works
+
+1. **Decode** the file to floating-point PCM with Symphonia.
+2. **Analyse**: spectral flux and autocorrelation build the beat grid; each beat gets chroma, spectral shape, loudness, and onset strength.
+3. **Graph**: only beats at the same position are compared, and accepted as branches when they sound alike at the transition.
+4. **Plan**: a weighted infinite random walk picks the sequential edge or a branch, using novelty and coverage weighting to keep things fresh.
+
+The [playback planning](docs/playback-planning.md) guide describes the walker in full; the [simulator](docs/debug-simulator.md) covers how it is measured.
 
 ## Development
 
@@ -94,17 +68,11 @@ coverage and loop behaviour without playing audio.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-# MPRIS integration test (requires dbus-run-session and playerctl)
+# MPRIS integration test (needs dbus-run-session and playerctl)
 dbus-run-session -- cargo test -p eternal-tui mpris_round_trip -- --ignored
 ```
 
 ### Browser app
-
-The web app processes every file locally. Browser-native audio decoding and
-playback surround the Rust analysis and planning engine, which is compiled to
-WebAssembly. Analysis runs in a Web Worker so long tracks do not freeze the UI.
-
-Install `wasm-pack` once, then start Vite:
 
 ```sh
 cargo install wasm-pack --locked
@@ -114,9 +82,8 @@ pnpm wasm
 pnpm dev
 ```
 
-`pnpm build` regenerates the release WebAssembly package, type-checks the app,
-and creates the production bundle in `web/dist`.
+`pnpm build` rebuilds the WebAssembly package, type-checks the app, and writes the production site to `web/dist`. Analysis runs in a Web Worker so long tracks don't freeze the UI.
 
-## License
+## Credits
 
-MIT
+Built on the original [Eternal Jukebox](https://github.com/EternalBox/EternalJukebox) by EternalBox and its contributors.
