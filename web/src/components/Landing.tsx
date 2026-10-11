@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import type { DragEvent } from 'react'
 import { Brand } from './Brand'
 
@@ -21,8 +22,18 @@ const phaseCopy = {
 } as const
 
 export function Landing({ dragging, error, fileName, phase, onDragChange, onFile }: LandingProps) {
+  const dragDepth = useRef(0)
+  const handleDragEnter = () => {
+    dragDepth.current += 1
+    onDragChange(true)
+  }
+  const handleDragLeave = () => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) onDragChange(false)
+  }
   const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
     event.preventDefault()
+    dragDepth.current = 0
     onDragChange(false)
     const file = event.dataTransfer.files[0]
     if (file) onFile(file)
@@ -41,12 +52,12 @@ export function Landing({ dragging, error, fileName, phase, onDragChange, onFile
         <div className="mini-visual" aria-hidden="true">{Array.from({ length: 28 }, (_, index) => <i key={index} style={{ height: `${18 + ((index * 23) % 58)}%` }} />)}</div>
         <label
           className={`dropzone ${dragging ? 'is-dragging' : ''} ${phase === 'decoding' || phase === 'analysing' ? 'is-busy' : ''}`}
-          onDragEnter={() => onDragChange(true)}
-          onDragLeave={() => onDragChange(false)}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
           onDragOver={(event) => event.preventDefault()}
           onDrop={handleDrop}
         >
-          <input type="file" accept="audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onFile(file) }} />
+          <input type="file" accept="audio/*" aria-label="Choose an audio file" onChange={(event) => { const file = event.target.files?.[0]; if (file) onFile(file) }} />
           <span className="upload-icon">↥</span>
           <strong>{phaseCopy[phase][0]}</strong>
           <small>{fileName && phase !== 'idle' && phase !== 'error' ? fileName : phaseCopy[phase][1]}</small>

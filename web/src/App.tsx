@@ -25,10 +25,12 @@ function App() {
   const [sessionSeconds, setSessionSeconds] = useState(0)
   const sessionElapsed = useRef(0)
   const sessionTick = useRef(0)
+  const loadGeneration = useRef(0)
   const player = useRef<EndlessPlayer | undefined>(undefined)
   const planner = useRef<WebPlanner | undefined>(undefined)
 
   useEffect(() => () => {
+    loadGeneration.current++
     player.current?.destroy()
     planner.current?.free()
   }, [])
@@ -45,16 +47,19 @@ function App() {
   }, [track, paused])
 
   const load = useCallback(async (file: File) => {
+    const generation = ++loadGeneration.current
     player.current?.destroy()
     planner.current?.free()
     player.current = undefined
     planner.current = undefined
     setError('')
     setTrack(undefined)
+    setLive(undefined)
     setHistory([])
     setJumpCount(0)
     setQueue([])
     setCoverage([])
+    setChoices([])
     sessionElapsed.current = 0
     sessionTick.current = 0
     setSessionSeconds(0)
@@ -65,13 +70,17 @@ function App() {
       setPhase('decoding')
       context = new AudioContext({ latencyHint: 'playback' })
       const buffer = await context.decodeAudioData(await file.arrayBuffer())
+      if (generation !== loadGeneration.current) { await context.close(); return }
       setPhase('analysing')
       const result = await analyseBuffer(buffer)
+      if (generation !== loadGeneration.current) { await context.close(); return }
       if (!result.graph.branches.some((branches) => branches.length)) {
         throw new Error('No usable transitions found. Try a longer or more repetitive track.')
       }
       await initWasm()
+      if (generation !== loadGeneration.current) { await context.close(); return }
       const engine = new WebPlanner(JSON.stringify(result.graph))
+      if (generation !== loadGeneration.current) { engine.free(); await context.close(); return }
       planner.current = engine
       const nextBeat = (): PlannedBeat => {
         const [beat, jumpedFrom, probability] = JSON.parse(engine.plan_next()) as [number, number | null, number]
@@ -103,8 +112,9 @@ function App() {
       setPhase('ready')
       await audioPlayer.start()
     } catch (cause) {
-      if (player.current) player.current.destroy()
-      else if (context && context.state !== 'closed') await context.close()
+      if (context && context.state !== 'closed') await context.close()
+      if (generation !== loadGeneration.current) return
+      player.current?.destroy()
       planner.current?.free()
       player.current = undefined
       planner.current = undefined
@@ -144,7 +154,9 @@ function App() {
   useEffect(() => {
     if (!track) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement) return
+      const target = event.target
+      if (target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable)) return
+      if (target instanceof HTMLInputElement && target.type !== 'range') return
       if (event.key === 'p') void toggle()
       else if (event.key === '0') seekToBeat(0)
       else if (event.key === 'b') seek(-10)
@@ -161,6 +173,7 @@ function App() {
   if (!track) return <Landing dragging={dragging} error={error} fileName={fileName} phase={phase} onDragChange={setDragging} onFile={(file) => void load(file)} />
 
   const changeTrack = () => {
+    loadGeneration.current++
     player.current?.destroy()
     planner.current?.free()
     player.current = undefined
