@@ -63,7 +63,11 @@ jobs:
           package_json_file: web/package.json
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
       - name: Lint
         run: pnpm lint
       - name: Build and type-check
         run: pnpm build
+      - name: Test
+        run: pnpm test

@@ -23,6 +23,8 @@ function App() {
   const [volume, setVolume] = useState(0.85)
   const [dragging, setDragging] = useState(false)
   const [sessionSeconds, setSessionSeconds] = useState(0)
+  const sessionElapsed = useRef(0)
+  const sessionTick = useRef(0)
   const player = useRef<EndlessPlayer | undefined>(undefined)
   const planner = useRef<WebPlanner | undefined>(undefined)
 
@@ -31,11 +33,16 @@ function App() {
     planner.current?.free()
   }, [])
   useEffect(() => {
-    if (!track) return
-    const started = performance.now()
-    const timer = window.setInterval(() => setSessionSeconds(Math.floor((performance.now() - started) / 1000)), 1000)
+    if (!track || paused) return
+    sessionTick.current = Date.now()
+    const timer = window.setInterval(() => {
+      const now = Date.now()
+      sessionElapsed.current += (now - sessionTick.current) / 1000
+      sessionTick.current = now
+      setSessionSeconds(Math.floor(sessionElapsed.current))
+    }, 1000)
     return () => clearInterval(timer)
-  }, [track])
+  }, [track, paused])
 
   const load = useCallback(async (file: File) => {
     player.current?.destroy()
@@ -48,6 +55,8 @@ function App() {
     setJumpCount(0)
     setQueue([])
     setCoverage([])
+    sessionElapsed.current = 0
+    sessionTick.current = 0
     setSessionSeconds(0)
     setPaused(false)
     setFileName(file.name)
@@ -160,6 +169,9 @@ function App() {
     setLive(undefined)
     setJumpCount(0)
     setPaused(false)
+    sessionElapsed.current = 0
+    sessionTick.current = 0
+    setSessionSeconds(0)
     setPhase('idle')
   }
 

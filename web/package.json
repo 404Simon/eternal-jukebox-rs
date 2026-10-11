@@ -11,6 +11,8 @@
     "build:pages": "pnpm wasm && tsc -b && vite build --base \"$VITE_BASE_PATH\"",
     "check": "tsc -b --pretty false",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -19,15 +21,21 @@
   },
   "devDependencies": {
     "@eslint/js": "latest",
-    "@vitejs/plugin-react": "latest",
+    "@types/node": "^26.6.5",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "@vitest/browser": "^5.0.3",
+    "@vitest/browser-playwright": "^5.0.3",
     "eslint": "latest",
     "eslint-plugin-react-hooks": "latest",
     "eslint-plugin-react-refresh": "latest",
     "globals": "latest",
+    "playwright": "^1.64.0",
     "typescript": "~6.0.0",
     "typescript-eslint": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "vitest": "^5.0.3",
+    "vitest-browser-react": "^2.3.0"
   }
 }
