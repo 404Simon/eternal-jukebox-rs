@@ -276,6 +276,9 @@ pub fn play(
                 );
                 pending = restart_at(target, &mut planner, &output.player, &mut dashboard);
             }
+            if key.code == KeyCode::Char('0') {
+                pending = restart_at(0, &mut planner, &output.player, &mut dashboard);
+            }
             dashboard.publish(&mut remote);
         }
     }
@@ -754,7 +757,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, dashboard: &Dashboard<'_>) {
             Style::default().fg(CYAN),
         ),
         Span::styled(
-            "    ◀ b  seek  f ▶     − ,  volume  . +     p  pause     q  quit  ",
+            "    0 start   ◀ b  seek  f ▶     − ,  volume  . +     p  pause     q  quit  ",
             Style::default().fg(YELLOW),
         ),
     ]);

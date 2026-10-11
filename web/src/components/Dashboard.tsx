@@ -93,6 +93,6 @@ export function Dashboard(props: DashboardProps) {
       </Panel>
     </div>
 
-    <footer className="shortcut-bar"><span><kbd>B</kbd> back</span><span><kbd>F</kbd> forward</span><span><kbd>P</kbd> pause</span><span><kbd>,</kbd><kbd>.</kbd> volume</span><strong><i /> {jumpCount} jumps this session</strong></footer>
+    <footer className="shortcut-bar"><span><kbd>0</kbd> start</span><span><kbd>B</kbd> back</span><span><kbd>F</kbd> forward</span><span><kbd>P</kbd> pause</span><span><kbd>,</kbd><kbd>.</kbd> volume</span><strong><i /> {jumpCount} jumps this session</strong></footer>
   </main>
 }

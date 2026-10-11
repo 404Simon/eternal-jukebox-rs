@@ -137,6 +137,7 @@ function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement) return
       if (event.key === 'p') void toggle()
+      else if (event.key === '0') seekToBeat(0)
       else if (event.key === 'b') seek(-10)
       else if (event.key === 'f') seek(10)
       else if (event.key === ',') changeVolume(Math.max(0, volume - .05))
@@ -146,7 +147,7 @@ function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [changeVolume, seek, toggle, track, volume])
+  }, [changeVolume, seek, seekToBeat, toggle, track, volume])
 
   if (!track) return <Landing dragging={dragging} error={error} fileName={fileName} phase={phase} onDragChange={setDragging} onFile={(file) => void load(file)} />
 
