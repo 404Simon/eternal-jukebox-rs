@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "eternal-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "getrandom 0.4.3",
  "rand 0.9.5",
@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "eternal-tui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-channel",
