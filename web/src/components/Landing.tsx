@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import type { DragEvent } from 'react'
 import { Brand } from './Brand'
+import { RepoLink } from './RepoLink'
 
 type Phase = 'idle' | 'decoding' | 'analysing' | 'ready' | 'error'
 
@@ -40,7 +41,7 @@ export function Landing({ dragging, error, fileName, phase, onDragChange, onFile
   }
 
   return <main className="landing-page">
-    <nav className="site-nav"><Brand /><span className="local-pill"><i /> 100% local</span></nav>
+    <nav className="site-nav"><Brand /><div className="nav-actions"><span className="local-pill"><i /> 100% local</span><RepoLink /></div></nav>
     <section className="landing-grid">
       <div className="hero-copy">
         <span className="kicker">The infinite music machine</span>

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { PlannedBeat, PreparedTrack, TransitionProbability } from '../types'
 import { beatLabel, formatSession, formatTime } from '../format'
 import { Brand } from './Brand'
+import { RepoLink } from './RepoLink'
 import { BeatConnections } from './BeatConnections'
 
 interface DashboardProps {
@@ -43,7 +44,7 @@ export function Dashboard(props: DashboardProps) {
   })
 
   return <main className="app-page">
-    <nav className="site-nav dashboard-nav"><Brand /><div><span className={`play-state ${paused ? 'is-paused' : ''}`}><i /> {paused ? 'Paused' : 'Playing'}</span><button className="ghost-button" onClick={props.onChangeTrack}>Change track</button></div></nav>
+    <nav className="site-nav dashboard-nav"><Brand /><div className="nav-actions"><span className={`play-state ${paused ? 'is-paused' : ''}`}><i /> {paused ? 'Paused' : 'Playing'}</span><RepoLink /><button className="ghost-button" onClick={props.onChangeTrack}>Change track</button></div></nav>
 
     <section className="track-heading">
       <div><span className="kicker">Infinite mix</span><h1 title={fileName}>{fileName}</h1><p>{track.analysis.tempo.toFixed(1)} BPM <i /> {track.analysis.beats.length} beats <i /> {branchCount} transitions</p></div>
