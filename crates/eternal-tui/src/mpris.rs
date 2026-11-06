@@ -126,10 +126,7 @@ impl Service {
         // Connection::request_name_with_flags caches already-owned names.
         let bus = fdo::DBusProxy::new(server.connection()).await?;
         match bus
-            .request_name(
-                BUS_NAME.try_into()?,
-                fdo::RequestNameFlags::DoNotQueue.into(),
-            )
+            .request_name(BUS_NAME.try_into()?, fdo::RequestNameFlags::DO_NOT_QUEUE)
             .await?
         {
             fdo::RequestNameReply::PrimaryOwner | fdo::RequestNameReply::AlreadyOwner => {}
@@ -189,7 +186,7 @@ async fn with_timeout<T>(operation: impl Future<Output = zbus::Result<T>>) -> zb
 
 pub(crate) fn control(command: ControlCommand) -> Result<()> {
     block_on(with_timeout(async {
-        let connection = zbus::connection::Builder::session()?
+        let connection = zbus::connection::Builder::session()
             .method_timeout(TIMEOUT)
             .build()
             .await?;
@@ -469,27 +466,21 @@ mod tests {
     fn exercise_client() {
         block_on(async {
             let connection = zbus::connection::Builder::session()
-                .unwrap()
                 .method_timeout(TIMEOUT)
                 .build()
                 .await
                 .unwrap();
             let proxy = zbus::proxy::Builder::<zbus::Proxy<'_>>::new(&connection)
                 .destination(BUS_NAME)
-                .unwrap()
                 .path(OBJECT_PATH)
-                .unwrap()
                 .interface(PLAYER_INTERFACE)
-                .unwrap()
                 .cache_properties(zbus::proxy::CacheProperties::No)
                 .build()
                 .await
                 .unwrap();
             let properties = fdo::PropertiesProxy::builder(&connection)
                 .destination(BUS_NAME)
-                .unwrap()
                 .path(OBJECT_PATH)
-                .unwrap()
                 .build()
                 .await
                 .unwrap();
@@ -533,7 +524,7 @@ mod tests {
             );
             assert!(proxy.set_property("Volume", f64::NAN).await.is_err());
             assert!(!proxy.get_property::<bool>("CanSeek").await.unwrap());
-            let metadata: std::collections::HashMap<String, zbus::zvariant::OwnedValue> =
+            let metadata: std::collections::HashMap<String, zbus::OwnedVariant> =
                 proxy.get_property("Metadata").await.unwrap();
             assert_eq!(
                 metadata["xesam:title"].downcast_ref::<&str>().unwrap(),
